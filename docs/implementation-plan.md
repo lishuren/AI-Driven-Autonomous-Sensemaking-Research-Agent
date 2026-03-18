@@ -5,6 +5,8 @@
 Translate the Sensemaking architecture from documentation into a stable,
 incrementally buildable codebase without drifting back into a linear RAG design.
 
+For day-to-day status tracking, use [implementation-progress.md](implementation-progress.md).
+
 ## Phase 1: Documentation Lock
 
 Deliverables:
@@ -130,9 +132,7 @@ Current progress:
 
 ## Validation Note
 
-Editor-level validation is currently clean for the implemented Python files.
-Full test execution still requires a working Python interpreter in the runtime
-environment.
+The current validation result is tracked in [implementation-progress.md](implementation-progress.md).
 
 ## Phase 7: Writer And Reporting
 

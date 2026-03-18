@@ -115,6 +115,7 @@ The exact code layout may evolve, but the intended structure is:
 - Report contract: [docs/report-spec.md](docs/report-spec.md)
 - V1 reuse boundaries: [docs/reuse-from-v1.md](docs/reuse-from-v1.md)
 - Implementation plan: [docs/implementation-plan.md](docs/implementation-plan.md)
+- Implementation progress: [docs/implementation-progress.md](docs/implementation-progress.md)
 - Contributor workflow: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Current onboarding guidance: [USER_GUIDE.md](USER_GUIDE.md)
 

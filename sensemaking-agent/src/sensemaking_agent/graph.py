@@ -37,7 +37,7 @@ class RouteDecision(BaseModel):
 def graph_is_stable(
 	state: Mapping[str, Any], *, saturation_threshold: float = 0.10
 ) -> bool:
-	normalized = validate_state(state)
+	normalized = validate_state(state, recompute_metrics=False)
 	growth_ratio = float(normalized["metrics"].get("graph_growth_ratio", 0.0))
 	return growth_ratio <= saturation_threshold
 
@@ -45,7 +45,7 @@ def graph_is_stable(
 def find_open_high_severity_contradiction(
 	state: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-	normalized = validate_state(state)
+	normalized = validate_state(state, recompute_metrics=False)
 	for contradiction in normalized["contradictions"]:
 		if contradiction["status"] != "resolved" and contradiction["severity"] == "high":
 			return contradiction
@@ -55,7 +55,7 @@ def find_open_high_severity_contradiction(
 def find_open_priority_gap(
 	state: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-	normalized = validate_state(state)
+	normalized = validate_state(state, recompute_metrics=False)
 	priority_order = {"high": 0, "medium": 1, "low": 2}
 	open_gaps = [gap for gap in normalized["research_gaps"] if gap["status"] != "resolved"]
 	if not open_gaps:
@@ -77,7 +77,7 @@ def build_conflict_query(contradiction: Mapping[str, Any]) -> str:
 def should_continue(
 	state: Mapping[str, Any], config: RouterConfig | None = None
 ) -> RouteDecision:
-	normalized = validate_state(state)
+	normalized = validate_state(state, recompute_metrics=False)
 	config = config or RouterConfig()
 
 	if normalized["iteration_count"] >= config.max_iterations:
@@ -124,7 +124,7 @@ def should_continue(
 def apply_route_decision(
 	state: Mapping[str, Any], decision: RouteDecision
 ) -> ResearchState:
-	normalized = validate_state(state)
+	normalized = validate_state(state, recompute_metrics=False)
 	next_query = decision.target_query or normalized["current_query"]
 	route_record = {
 		"iteration": normalized["iteration_count"],

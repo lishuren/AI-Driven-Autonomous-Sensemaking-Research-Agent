@@ -24,6 +24,7 @@ Before writing or changing code, consult these repository docs:
 6. `docs/sensemaking-loop.md`
 7. `docs/report-spec.md`
 8. `docs/reuse-from-v1.md`
+9. `docs/implementation-progress.md`
 
 If generated code conflicts with those documents, update the docs or ask for a
 decision before continuing.

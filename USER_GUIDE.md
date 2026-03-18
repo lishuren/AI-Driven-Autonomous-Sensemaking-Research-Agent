@@ -29,6 +29,7 @@ Use this order:
 6. [docs/sensemaking-loop.md](docs/sensemaking-loop.md)
 7. [docs/report-spec.md](docs/report-spec.md)
 8. [docs/reuse-from-v1.md](docs/reuse-from-v1.md)
+9. [docs/implementation-progress.md](docs/implementation-progress.md)
 
 That sequence moves from product intent to implementation constraints.
 
@@ -64,6 +65,8 @@ Every implementation task in this repository should follow this order:
 6. Update docs if implementation reveals a mismatch in the contract.
 7. After the code change, review the affected docs again and update any stale
    status, workflow, or implementation notes before considering the work done.
+8. Update [docs/implementation-progress.md](docs/implementation-progress.md)
+   so the repository has a durable handoff point for the next day of work.
 
 ## Current Implementation Progress
 
