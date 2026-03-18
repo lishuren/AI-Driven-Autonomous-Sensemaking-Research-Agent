@@ -71,7 +71,8 @@ file sealed record TripletDto(
     [property: JsonPropertyName("subject")] string Subject,
     [property: JsonPropertyName("predicate")] string Predicate,
     [property: JsonPropertyName("object")] string Object,
-    [property: JsonPropertyName("evidence")] string Evidence
+    [property: JsonPropertyName("evidence")] string Evidence,
+    [property: JsonPropertyName("source_url")] string SourceUrl = ""
 );
 
 // ---------------------------------------------------------------------------
@@ -175,12 +176,13 @@ public sealed class AnalystNode
           not generic ones like "Data" or "Technology".
         - Normalisation: Resolve aliases ("OpenAI" and "OAI" → "OpenAI").
         - Sensemaking: Infer hidden connections (e.g. Lithium Shortage → delays → EV Production).
+        - Source URL: Set "source_url" to the URL of the document the triplet was extracted from.
 
         OUTPUT FORMAT (STRICT JSON)
         {
           "entities": ["Entity1", "Entity2", ...],
           "triplets": [
-            { "subject": "...", "predicate": "...", "object": "...", "evidence": "..." }
+            { "subject": "...", "predicate": "...", "object": "...", "evidence": "...", "source_url": "https://..." }
           ]
         }
         """;
@@ -236,7 +238,7 @@ public sealed class AnalystNode
         if (output is null) return new ResearchStateUpdate();
 
         var triplets = output.Triplets
-            .Select(t => new Triplet(t.Subject, t.Predicate, t.Object, t.Evidence))
+            .Select(t => new Triplet(t.Subject, t.Predicate, t.Object, t.Evidence, t.SourceUrl))
             .ToList();
 
         var graph = new KnowledgeGraph
