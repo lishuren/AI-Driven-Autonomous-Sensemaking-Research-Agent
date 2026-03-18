@@ -41,7 +41,7 @@ Transform the **"Search-and-Summarize"** model (linear RAG) into a **"Relational
 
 ### Language & Framework
 
-- **Language**: C# 12 / .NET 9
+- **Language**: C# 13 / .NET 10
 - **Project type**: Console application (`dotnet new console`)
 
 ### Agent Nodes
