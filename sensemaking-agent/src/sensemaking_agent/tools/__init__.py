@@ -1,0 +1,1 @@
+"""Scout-facing acquisition tools and adapters."""

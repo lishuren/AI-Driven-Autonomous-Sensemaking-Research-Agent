@@ -1,0 +1,1 @@
+"""Persistence adapters for state snapshots and related metadata."""

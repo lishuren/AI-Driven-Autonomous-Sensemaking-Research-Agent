@@ -1,0 +1,1 @@
+"""Node implementations for Scout, Analyst, Critic, and Writer."""
