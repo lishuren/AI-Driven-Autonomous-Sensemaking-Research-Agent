@@ -183,6 +183,29 @@ SensemakingAgent/
 
 ---
 
+## GraphRAG
+
+Yes — this project is a **GraphRAG** implementation.
+
+[GraphRAG](https://arxiv.org/abs/2404.16130) (Graph Retrieval-Augmented Generation) replaces flat
+vector search with a *Knowledge Graph* as the retrieval index.  Instead of finding the most similar
+text chunks, an LLM reads **graph edges** (triplets) to produce answers that are grounded in
+explicit, traceable relationships.
+
+### How GraphRAG is applied here
+
+| GraphRAG concept | Where it lives |
+|------------------|----------------|
+| **Entity extraction** | `AnalystNode` — LLM identifies named entities from scraped pages |
+| **Relationship extraction** | `AnalystNode` — LLM maps directed `Subject → Predicate → Object` triplets, each with a `source_url` for full traceability |
+| **Knowledge Graph construction** | `KnowledgeGraph` in `State.cs` — append-only; duplicates are deduplicated on `(Subject, Predicate, Object)` |
+| **Graph-based synthesis** | `WriterNode` — report is generated from graph entities + triplets, **not** raw document text |
+| **Iterative graph enrichment** | `SensemakingGraph` loop — Scout → Analyst → Critic repeats until the graph saturates (< 10 % new triplets) |
+| **Contradiction detection** | `CriticNode` — flags conflicting triplets with `High`/`Low` severity and triggers tie-breaker searches |
+| **Graph visualisation** | `Visualizer.cs` — interactive D3.js force-directed graph; contradicted nodes shown in red |
+
+---
+
 ## How It Differs from V1
 
 | Feature | V1 (Search-and-Summarise) | V2 (Sensemaking) |

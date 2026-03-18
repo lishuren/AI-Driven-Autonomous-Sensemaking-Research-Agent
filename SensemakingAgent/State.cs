@@ -63,7 +63,9 @@ public sealed class KnowledgeGraph
 
     /// <summary>
     /// Merge <paramref name="other"/> into this graph.
-    /// New entities and triplets are appended; no duplicates on entity names.
+    /// New entities and triplets are appended; exact duplicates (same Subject, Predicate,
+    /// Object <em>and</em> SourceUrl) are removed so that the same claim from multiple
+    /// independent sources is still preserved as separate, traceable entries.
     /// </summary>
     public KnowledgeGraph Merge(KnowledgeGraph other)
     {
@@ -74,6 +76,12 @@ public sealed class KnowledgeGraph
 
         var mergedTriplets = Triplets
             .Concat(other.Triplets)
+            .GroupBy(
+                t => (t.Subject.ToLowerInvariant(),
+                      t.Predicate.ToLowerInvariant(),
+                      t.Object.ToLowerInvariant(),
+                      t.SourceUrl.ToLowerInvariant()))
+            .Select(g => g.First())
             .ToList();
 
         return new KnowledgeGraph
