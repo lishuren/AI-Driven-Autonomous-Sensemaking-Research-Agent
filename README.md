@@ -10,12 +10,14 @@ not a linear list of findings.
 
 ## Status
 
-This repository is currently in a docs-first foundation phase.
+This repository has moved from docs-first planning into early implementation.
 
-- Product scope, architecture, and contributor workflow are being defined first.
+- The documentation set is in place and remains the source of truth.
+- The Python package scaffold exists under `sensemaking-agent/`.
+- The initial state, graph-export, and route-decision layers are implemented.
+- Scout, Analyst, Critic, Writer, and full LangGraph workflow wiring are still in
+  progress.
 - V1 remains the reference implementation for reusable search and scraping logic.
-- V2 implementation should begin only after these docs are accepted as the source
-  of truth.
 
 ## Product Thesis
 
@@ -131,12 +133,28 @@ The V1 topic graph is not the V2 knowledge graph.
 
 ## Near-Term Implementation Order
 
-1. Lock the docs set in this repository.
-2. Extract reusable Scout-layer tooling from V1 into a clean V2 tool boundary.
-3. Implement the V2 state schema and graph export helpers.
-4. Implement Analyst, Critic, and Writer nodes around structured outputs.
-5. Implement the LangGraph orchestration and routing logic.
-6. Add persistence, reporting, and graph visualization.
+1. Extract reusable Scout-layer tooling from V1 into a clean V2 tool boundary.
+2. Expand the existing state and router core into a full LangGraph workflow.
+3. Implement Analyst, Critic, and Writer nodes around structured outputs.
+4. Add persistence, reporting, and graph visualization.
+
+## Current Implementation Snapshot
+
+The repository already contains:
+
+- a Python package scaffold in `sensemaking-agent/`
+- Pydantic-backed state models and merge helpers
+- NetworkX graph export support
+- router decision logic for conflict resolution, gap resolution, continuation,
+  and finalization
+- baseline tests for state and routing behavior
+
+It does not yet contain:
+
+- Scout acquisition tooling
+- LangGraph node wiring
+- LLM-backed Analyst, Critic, or Writer nodes
+- a runnable CLI flow
 
 ## Non-Goals For The First Build
 

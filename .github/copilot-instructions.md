@@ -28,6 +28,13 @@ Before writing or changing code, consult these repository docs:
 If generated code conflicts with those documents, update the docs or ask for a
 decision before continuing.
 
+Treat documentation review as part of the implementation workflow:
+
+- Before code changes: review the relevant docs for the area you are touching.
+- After code changes: update any docs that became stale because of the change.
+- Do not leave status docs, architecture docs, or workflow docs lagging behind
+  the code when the mismatch is clear.
+
 ## Product Thesis
 
 The output is not just a summary of documents.
@@ -219,3 +226,15 @@ Prefer this order when generating code:
 
 Do not modify AI-Driven-Autonomous-Research-Agent when implementing this repo.
 Treat V1 as read-only reference material.
+
+## Documentation Update Rule
+
+For any non-trivial code change, perform a before-and-after documentation pass.
+
+Minimum expectation:
+
+1. Review the relevant contract docs before editing code.
+2. If the implementation changes the documented contract, update the docs in the
+  same work item.
+3. If the implementation changes only the current project status or next-step
+  guidance, update the corresponding status docs as well.

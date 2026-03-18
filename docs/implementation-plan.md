@@ -24,6 +24,8 @@ Exit criteria:
 
 ## Phase 2: Repository Scaffolding
 
+Status: in progress, largely complete for the initial foundation.
+
 Deliverables:
 
 1. Python package layout under `sensemaking-agent/`
@@ -36,6 +38,13 @@ Exit criteria:
 
 - package layout matches the architecture docs
 - contributors can start implementing nodes without restructuring the repo first
+
+Current progress:
+
+- `sensemaking-agent/` exists
+- package metadata exists
+- test layout exists
+- baseline state and routing tests exist
 
 ## Phase 3: Scout Extraction
 
@@ -58,6 +67,8 @@ Exit criteria:
 
 ## Phase 4: State And Graph Model
 
+Status: in progress, initial foundation implemented.
+
 Deliverables:
 
 1. `ResearchState`
@@ -71,6 +82,13 @@ Exit criteria:
 - the graph is append-friendly
 - the state can be checkpointed
 - tests validate merge and serialization behavior
+
+Current progress:
+
+- `ResearchState` and related records are implemented
+- merge and validation helpers are implemented
+- NetworkX export helper is implemented
+- baseline tests exist for state and graph behavior
 
 ## Phase 5: Analyst And Critic Nodes
 
@@ -89,6 +107,8 @@ Exit criteria:
 
 ## Phase 6: LangGraph Orchestration
 
+Status: started at the router layer only.
+
 Deliverables:
 
 1. graph builder
@@ -101,6 +121,18 @@ Exit criteria:
 
 - the workflow can loop safely
 - route decisions are testable and explainable
+
+Current progress:
+
+- route-decision logic is implemented
+- route-history updates are implemented
+- full LangGraph node wiring is not yet implemented
+
+## Validation Note
+
+Editor-level validation is currently clean for the implemented Python files.
+Full test execution still requires a working Python interpreter in the runtime
+environment.
 
 ## Phase 7: Writer And Reporting
 

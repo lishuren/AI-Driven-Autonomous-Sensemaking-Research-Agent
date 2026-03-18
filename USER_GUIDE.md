@@ -1,10 +1,10 @@
 # User Guide
 
-This repository is in a documentation-first implementation phase.
+This repository is in an early implementation phase.
 
-The goal of this guide is not yet to walk through a finished runtime. Instead,
-it explains how contributors should use the documentation package in this repo
-to start implementation without drifting away from the intended architecture.
+The goal of this guide is to explain how contributors should work with the
+existing docs and code foundation without drifting away from the intended
+architecture.
 
 ## Current State
 
@@ -13,6 +13,7 @@ At the moment, this repository should be treated as:
 - a product definition for the Sensemaking agent
 - an architecture contract for future contributors
 - a guardrail set for Copilot-assisted development
+- an early Python codebase containing the state and router core
 
 It should not yet be treated as a runnable replacement for V1.
 
@@ -61,19 +62,27 @@ Every implementation task in this repository should follow this order:
 4. Prefer structured output contracts before writing free-form prompts.
 5. Keep the knowledge graph and contradiction log as first-class outputs.
 6. Update docs if implementation reveals a mismatch in the contract.
+7. After the code change, review the affected docs again and update any stale
+   status, workflow, or implementation notes before considering the work done.
 
-## Planned Initial Build Sequence
+## Current Implementation Progress
 
-The intended first implementation wave is:
+Implemented now:
 
-1. Create the Python package skeleton under `sensemaking-agent/`.
-2. Implement the Scout boundary by adapting V1 search and scraping logic.
-3. Implement the V2 `ResearchState` and graph helper utilities.
-4. Implement structured Analyst extraction.
-5. Implement Critic contradiction and gap detection.
-6. Implement router logic and stop conditions.
-7. Implement Writer synthesis from graph data.
-8. Add persistence and graph visualization.
+1. Python package skeleton under `sensemaking-agent/`
+2. `ResearchState` schemas, merge helpers, and validation
+3. NetworkX graph export helpers
+4. router logic and stop conditions
+5. baseline tests for state and routing behavior
+
+Next implementation wave:
+
+1. implement the Scout boundary by adapting V1 search and scraping logic
+2. implement structured Analyst extraction
+3. implement Critic contradiction and gap detection against live graph state
+4. wire the LangGraph workflow
+5. implement Writer synthesis from graph data
+6. add persistence and graph visualization
 
 ## Environment Assumptions
 
@@ -87,18 +96,19 @@ The intended stack for V2 is:
 - Playwright as the browser fallback
 - Ollama or another compatible LLM endpoint for local or remote inference
 
-These are design assumptions for the first implementation pass, not a fully
-provisioned runtime yet.
+These are the intended runtime assumptions. A working local Python interpreter is
+still required before the current tests can be executed in this environment.
 
-## Definition Of Done For The Docs-First Phase
+## Current Definition Of Done
 
-The docs-first phase is complete when:
+The current foundation phase is complete when:
 
 1. the state model is explicit and serializable
-2. the routing logic is unambiguous
+2. the routing logic is unambiguous and implemented
 3. the report contract is graph-grounded
 4. the V1 reuse boundary is explicit
 5. the Copilot instructions are strong enough to keep generated code aligned
+6. the package scaffold is stable enough for Scout and node work to continue
 
 ## What To Do Next
 

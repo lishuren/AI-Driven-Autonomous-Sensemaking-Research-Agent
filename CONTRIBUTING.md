@@ -23,6 +23,9 @@ Read these files first:
 If the code you want to write conflicts with those documents, update the docs or
 raise the mismatch before continuing.
 
+Before starting a code change, contributors must review the relevant documents
+for that area and confirm the intended contract is still correct.
+
 ## Scope Boundaries
 
 Contributors must not:
@@ -72,6 +75,14 @@ Until the code exists, these expectations act as the design target.
 
 This repository is docs-led.
 
+Every code change should have a documentation pass both before and after the
+implementation work:
+
+1. Before code changes: review the relevant docs and either align the planned
+  implementation to them or update the docs first if the contract has changed.
+2. After code changes: review the affected docs again and update any stale
+  status, behavior, API, workflow, or sequencing details in the same work item.
+
 When you change one of these contracts, update the matching documentation in the
 same work item:
 
@@ -80,6 +91,10 @@ same work item:
 - route names and stop conditions
 - final report sections
 - V1 reuse boundary
+
+This applies both to architecture/spec docs and to implementation-status docs
+such as the root README, user guide, and package README when they describe the
+current state of the codebase.
 
 ## Copilot Usage
 

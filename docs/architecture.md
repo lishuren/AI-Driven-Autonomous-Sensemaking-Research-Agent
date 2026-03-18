@@ -105,6 +105,11 @@ Critic
 - Playwright as browser fallback
 - Ollama or another compatible LLM endpoint
 
+LangGraph is a core runtime dependency for V2.
+LangChain may be used selectively later if a narrow need appears, but it should
+not become the primary architecture or replace the explicit state-and-router
+design defined in this repository.
+
 ## Why LangGraph
 
 LangGraph fits the V2 architecture because the system needs:
@@ -118,6 +123,9 @@ LangGraph fits the V2 architecture because the system needs:
 V1 already demonstrates strong orchestration discipline, but its primary model is
 recursive research and consolidation. V2 needs a stronger graph-centric state
 machine with explicit contradiction and gap-driven routing.
+
+The current implementation has already adopted this direction by making the
+state and route-decision layers explicit in code before Scout and node wiring.
 
 ## Brain vs Body Boundary
 
