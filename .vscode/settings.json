@@ -1,0 +1,19 @@
+{
+    "python-envs.pythonProjects": [
+        {
+            "path": ".",
+            "envManager": "ms-python.python:venv",
+            "packageManager": "ms-python.python:pip"
+        }
+    ],
+    "copilotLocalMemory.enabled": true,
+    "copilotLocalMemory.projectName": "LogUsage",
+    "copilotLocalMemory.storePrompts": true,
+    "copilotLocalMemory.storeResponses": true,
+    "copilotLocalMemory.defaultQueryLimit": 20,
+    "copilotLocalMemory.enablePostInteractionCommand": true,
+    // This is a macOS example. The command can be any shell command that should run when the interaction is done.
+    //"copilotLocalMemory.postInteractionCommand": "afplay /System/Library/Sounds/Glass.aiff"
+    "copilotLocalMemory.postInteractionCommand": "powershell -Command (New-Object System.Media.SoundPlayer 'C:\\Windows\\Media\\Alarm01.wav').PlaySync()"
+
+}

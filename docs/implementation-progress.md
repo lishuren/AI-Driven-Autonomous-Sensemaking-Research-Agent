@@ -55,7 +55,7 @@ foundation for the state and routing layers.
 
 - project dependencies installed with Python 3.12.7
 - current automated test suite passes
-- latest result: `10 passed`
+- latest result: `43 passed`
 
 ## Current Code Surface
 
@@ -66,36 +66,50 @@ Implemented now:
 - graph export helper
 - route-decision logic
 - state and routing tests
+- Scout acquisition tooling (`ScoutTool`, `SearchTool`, `ScraperTool`)
+- config module for Tavily, scraper, budget, and LLM settings (`AgentConfig`, `LLMConfig`)
+- Scout tests (dry-run, budget guard, missing API key, all acquisition tiers, document normalization)
+- budget `approaching_limit` correctly treats `warn_threshold=1.0` as disabled
+- LangGraph workflow wired: Scout → Analyst → Critic → Router → Writer
+- Scout node: bridges ScoutTool into state
+- **Analyst node** (`nodes/analyst_node.py`): full LLM-backed extraction — entities, triplets, evidence, alias merging; skips already-processed documents; JSON output parsed via Pydantic; prompt driven by `prompts/analyst_extract.md`
+- **Critic node** (`nodes/critic_node.py`): full LLM-backed contradiction and gap detection — compares triplets from current iteration against existing graph; records `ContradictionState` and `ResearchGapState` with hash-based IDs; deduplicates against already-stored records; never overwrites prior evidence; prompt driven by `prompts/critic_analyze.md`
+- Router node: wraps `should_continue` and returns `Command` for dynamic routing
+- Writer node stub: stores placeholder synthesis with counts
+- `llm_client.py`: thin async Ollama / OpenAI-compatible LLM wrapper (executor-offloaded)
+- `prompt_loader.py`: loads prompt files from bundled `prompts/` directory or custom path
+- `prompts/analyst_extract.md`: entity and triplet extraction prompt (directional predicates, evidence requirement, confidence scoring)
+- `prompts/critic_analyze.md`: contradiction and gap detection prompt (both-sides evidence preservation, severity and priority scoring rules, strict JSON output schema)
+- `workflow.py`: builds and compiles the `StateGraph`; accepts `llm_config`
+- `main.py`: CLI entry point (`--query`, `--max-iterations`, `--log-level`)
+- Analyst tests: parse_extraction, triplet_id, merge_entity helpers, full node integration (LLM stubbed)
+- Critic tests (`tests/test_critic.py`): id helpers, parse helpers, iteration filtering, deduplication, contradiction detection, gap detection, missing prompt fallback (all LLM-stubbed, 28 new tests)
+- Workflow tests: all patched for offline LLM where documents are processed
 
 Not implemented yet:
 
-- Scout acquisition tooling
-- LangGraph node wiring
-- Analyst node
-- Critic node
-- Writer node
-- runnable CLI flow
-- persistence and visualization artifacts beyond in-memory graph export
+- Writer synthesis from knowledge graph (graph-grounded narrative)
+- persistence (JSON checkpoint after each iteration)
+- visualization
 
 ## Current Validation Status
 
-Validated on 2026-03-19:
+Validated on 2026-03-20:
 
-- `D:\Program Files\Python3.12\python.exe -m pytest -q`
-- result: `10 passed in 0.33s`
+- `.venv\Scripts\python.exe -m pytest tests/ -q`
+- result: `102 passed in 0.87s`
+- run from `sensemaking-agent/` directory
 
 Known note:
 
 - `python` on PATH still resolves to the Windows Store shim in this environment
-- use the concrete interpreter path or `py.exe` carefully when validating
+- use the concrete interpreter path or `.venv\Scripts\python.exe` when validating
 
 ## Next Recommended Steps
 
-1. Implement the Scout boundary under `sensemaking_agent.tools`
-2. Add a settings/config module for Tavily, LLM, scrape, and retry options
-3. Wire the first LangGraph workflow shell around Scout plus the existing router
-4. Implement Analyst structured extraction
-5. Implement Critic contradiction and gap detection
+1. Implement Writer synthesis from the knowledge graph (graph-grounded narrative, contradiction log, evidence trails)
+2. Add persistence (JSON checkpoint after each iteration)
+3. Add visualization (graph export to DOT or rendering)
 
 ## Blockers
 
