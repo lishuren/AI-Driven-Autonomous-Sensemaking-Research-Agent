@@ -13,7 +13,6 @@
     "copilotLocalMemory.defaultQueryLimit": 20,
     "copilotLocalMemory.enablePostInteractionCommand": true,
     // This is a macOS example. The command can be any shell command that should run when the interaction is done.
-    //"copilotLocalMemory.postInteractionCommand": "afplay /System/Library/Sounds/Glass.aiff"
-    "copilotLocalMemory.postInteractionCommand": "powershell -Command (New-Object System.Media.SoundPlayer 'C:\\Windows\\Media\\Alarm01.wav').PlaySync()"
+     "copilotLocalMemory.postInteractionCommand": "powershell -Command \"(New-Object System.Media.SoundPlayer 'C:\\Windows\\Media\\Alarm01.wav').PlaySync()\""
 
 }

@@ -7,5 +7,13 @@
 			"path": "../AI-Driven-Autonomous-Research-Agent"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"copilotLocalMemory.enabled": true,
+		"copilotLocalMemory.projectName": "sensemaking-agent",
+		"copilotLocalMemory.storePrompts": true,
+		"copilotLocalMemory.storeResponses": true,
+		"copilotLocalMemory.defaultQueryLimit": 20,
+		"copilotLocalMemory.enablePostInteractionCommand": true,
+		"copilotLocalMemory.postInteractionCommand": "powershell -Command \"(New-Object System.Media.SoundPlayer 'C:\\Windows\\Media\\Alarm01.wav').PlaySync()\""
+	}
 }
