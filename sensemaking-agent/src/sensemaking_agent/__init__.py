@@ -1,7 +1,8 @@
 """Sensemaking agent package.
 
-The first implementation pass exposes the canonical workflow state and the graph
-helper utilities that later LangGraph nodes will build on.
+Provides the full sensemaking workflow: Scout document acquisition, Analyst
+entity and triplet extraction, Critic contradiction and gap detection, Router
+state-graph orchestration, and Writer graph-grounded report synthesis.
 """
 
 from .graph import (

@@ -27,7 +27,7 @@ Public API
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langgraph.graph import END, StateGraph
 
@@ -37,9 +37,12 @@ from .nodes.analyst_node import make_analyst_node
 from .nodes.critic_node import make_critic_node
 from .nodes.router_node import make_router_node
 from .nodes.scout_node import make_scout_node
-from .nodes.writer_node import writer_node
+from .nodes.writer_node import make_writer_node
 from .state import ResearchState
 from .tools.scout_tool import ScoutTool
+
+if TYPE_CHECKING:
+    from .database import RunArtifactStore
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,8 @@ def build_workflow(
     scout_tool: ScoutTool | None = None,
     router_config: RouterConfig | None = None,
     llm_config: LLMConfig | None = None,
+    artifact_store: RunArtifactStore | None = None,
+    prompt_dir: str | None = None,
 ) -> Any:
     """Build and compile the sensemaking state graph.
 
@@ -70,10 +75,10 @@ def build_workflow(
 
     # Register nodes.
     graph.add_node("scout", make_scout_node(scout_tool))
-    graph.add_node("analyst", make_analyst_node(llm_config))
-    graph.add_node("critic", make_critic_node(llm_config))
-    graph.add_node("router", make_router_node(router_config))
-    graph.add_node("writer", writer_node)
+    graph.add_node("analyst", make_analyst_node(llm_config, prompt_dir))
+    graph.add_node("critic", make_critic_node(llm_config, prompt_dir))
+    graph.add_node("router", make_router_node(router_config, artifact_store=artifact_store))
+    graph.add_node("writer", make_writer_node(llm_config, artifact_store, prompt_dir))
 
     # Fixed edges: Scout → Analyst → Critic → Router.
     graph.set_entry_point("scout")

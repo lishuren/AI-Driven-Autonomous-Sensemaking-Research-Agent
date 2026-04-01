@@ -10,14 +10,155 @@ not a linear list of findings.
 
 ## Status
 
-This repository has moved from docs-first planning into early implementation.
+The core sensemaking pipeline is implemented and runnable end-to-end.
 
-- The documentation set is in place and remains the source of truth.
-- The Python package scaffold exists under `sensemaking-agent/`.
-- The initial state, graph-export, and route-decision layers are implemented.
-- Scout, Analyst, Critic, Writer, and full LangGraph workflow wiring are still in
-  progress.
-- V1 remains the reference implementation for reusable search and scraping logic.
+- Full LangGraph workflow: Scout → Analyst → Critic → Router → Writer.
+- Entity and relationship extraction with structured Pydantic output contracts.
+- Contradiction detection with severity, evidence, and tie-breaker routing.
+- Research-gap discovery with recursive loop-back to Scout.
+- Graph-grounded Writer synthesis with deterministic fallback.
+- Per-run artifact persistence — checkpoints, final report, graph export, HTML viewer.
+- Automatic resume of the latest unfinished run for the same query.
+- CLI acquisition controls: dry-run, budget limits, Tavily key override, scraper policy.
+- Visualization exports for GraphML, DOT, and a lightweight HTML viewer.
+- 123 automated tests across state, tools, nodes, workflow, persistence, and LLM transport.
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.10+
+- Either a local [Ollama](https://ollama.ai/) server with a model pulled, or an
+  OpenAI-compatible endpoint such as [SiliconFlow](https://www.siliconflow.cn)
+- A **Tavily API key** — set `TAVILY_API_KEY` in your environment or pass
+  `--tavily-key`. Sign up at [tavily.com](https://tavily.com) (free tier:
+  1,000 credits/month).
+
+### Install
+
+```bash
+cd sensemaking-agent
+pip install -e ".[dev]"
+python -m playwright install chromium
+```
+
+### Configure
+
+Create `sensemaking-agent/.env` with your API keys (see `topicexample/.env` for
+an example).  At minimum set `TAVILY_API_KEY`.
+
+LLM defaults to Ollama at `http://localhost:11434` with model `qwen2.5:7b`.
+Override via environment variables (see `.env.example` for all options).
+
+### Run
+
+```bash
+# From sensemaking-agent/
+
+# Basic run (Ollama + qwen2.5:7b must be running)
+python -m sensemaking_agent --query "lithium supply chain risks"
+
+# Use a self-contained topic directory (recommended)
+python -m sensemaking_agent --topic-dir ../topicexample
+
+# Limit iterations and choose an output directory
+python -m sensemaking_agent --query "CRISPR gene editing mechanisms" \
+  --max-iterations 3 \
+  --output-dir ./data/runs
+
+# Dry run — no Tavily calls, useful for offline development
+python -m sensemaking_agent --query "quantum computing" --dry-run
+
+# Use SiliconFlow instead of Ollama
+SENSEMAKING_LLM_PROVIDER=openai \
+SENSEMAKING_LLM_BASE_URL=https://api.siliconflow.cn/v1 \
+SENSEMAKING_LLM_API_KEY=sk-YOUR-KEY \
+SENSEMAKING_LLM_MODEL=Qwen/Qwen2.5-7B-Instruct \
+python -m sensemaking_agent --query "lithium supply chain risks"
+
+# With budget controls
+python -m sensemaking_agent --query "AI safety" \
+  --max-queries 20 \
+  --max-credits 50.0 \
+  --warn-threshold 0.8
+
+# Disable Playwright fallback scraping
+python -m sensemaking_agent --query "climate tipping points" --no-scrape
+
+# Resume an interrupted run automatically (re-run the same command)
+python -m sensemaking_agent --query "lithium supply chain risks" \
+  --output-dir ./data/runs
+```
+
+To check your Tavily credit balance at any time:
+
+```bash
+python sensemaking-agent/check_tavily_usage.py
+```
+
+### CLI Reference
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--query QUERY` | — | Research question or topic (mutually exclusive with `--topic-dir`) |
+| `--topic-dir DIR` | — | Self-contained topic folder with requirements.md, prompts/, resources/ |
+| `--max-iterations N` | `5` | Maximum sensemaking loop iterations |
+| `--output-dir DIR` | `data/runs` | Directory for checkpoints and final artifacts |
+| `--no-persist` | off | Disable writing artifacts to disk |
+| `--prompt-dir DIR` | bundled | Directory with custom prompt template overrides |
+| `--dry-run` | off | Disable live Tavily calls (offline orchestration) |
+| `--tavily-key KEY` | env | Tavily API key override for this run |
+| `--max-results N` | `5` | Maximum Tavily results per search call |
+| `--max-queries N` | unlimited | Maximum Tavily API calls for this run |
+| `--max-credits CREDITS` | unlimited | Maximum Tavily credits to spend |
+| `--warn-threshold FRACTION` | `0.80` | Warn when budget hits this fraction of a limit |
+| `--no-scrape` | off | Disable Playwright fallback scraper |
+| `--respect-robots` / `--no-respect-robots` | env (`true`) | robots.txt advisory check |
+| `--log-level LEVEL` | `INFO` | Logging verbosity |
+
+### Environment Variables
+
+LLM settings are configured via environment variables (no CLI flags):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TAVILY_API_KEY` | — | Tavily API key (required for live runs) |
+| `SENSEMAKING_LLM_MODEL` | `qwen2.5:7b` | LLM model name |
+| `SENSEMAKING_LLM_PROVIDER` | `ollama` | Provider: `ollama` or `openai` |
+| `SENSEMAKING_LLM_BASE_URL` | `http://localhost:11434` | LLM server base URL |
+| `SENSEMAKING_LLM_API_KEY` | — | API key for online providers |
+| `SENSEMAKING_MAX_QUERIES` | unlimited | Max Tavily calls per run |
+| `SENSEMAKING_MAX_CREDITS` | unlimited | Max Tavily credits per run |
+| `SENSEMAKING_NO_SCRAPE` | `false` | Disable Playwright scraping |
+| `SENSEMAKING_RESPECT_ROBOTS` | `true` | Advisory robots.txt check |
+| `SENSEMAKING_PROMPT_DIR` | — | Custom prompt template directory |
+
+CLI flags always take precedence over environment variables.
+
+### Topic Directory Convention
+
+Instead of passing `--query` with many flags, create a self-contained folder:
+
+```text
+my-topic/
+├── .env              ← API keys and budget (auto-loaded, gitignored)
+├── requirements.md   ← topic spec (## Topic, ## Research Focus, ## Background)
+├── prompts/          ← optional prompt template overrides
+├── resources/        ← optional local PDFs, Word docs, Markdown, text
+└── output/           ← auto-created; run artifacts go here
+```
+
+Run with:
+
+```bash
+python -m sensemaking_agent --topic-dir ./my-topic
+```
+
+No `--query`, `--output-dir`, or `--prompt-dir` needed — all paths are derived
+from the folder layout.  Local documents in `resources/` are loaded as seed
+documents into the knowledge graph before the first web search.
+
+See `topicexample/` for a complete working example.
 
 ## Product Thesis
 
@@ -42,7 +183,7 @@ The V2 system is expected to support all of the following:
    foundational concepts.
 5. Tie-breaker searches when high-severity claims conflict.
 6. Final reports generated from graph structure, not raw snippets.
-7. Eventual graph visualization for inspection and debugging.
+7. Graph visualization for inspection and debugging.
 
 ## Architecture Direction
 
@@ -65,8 +206,6 @@ Scout when new gaps or disputes are discovered.
 
 ## Planned Repository Layout
 
-The exact code layout may evolve, but the intended structure is:
-
 ```text
 .
 ├── .github/
@@ -81,6 +220,8 @@ The exact code layout may evolve, but the intended structure is:
 │   ├── reuse-from-v1.md
 │   └── implementation-plan.md
 ├── sensemaking-agent/
+│   ├── .env                  ← API keys — gitignored, copy from topicexample/.env
+│   ├── check_tavily_usage.py ← check Tavily credit balance
 │   ├── prompts/
 │   ├── src/
 │   │   ├── main.py
@@ -132,30 +273,41 @@ AI-Driven-Autonomous-Research-Agent remains the reference source for:
 V2 deliberately diverges from V1 in its primary state model and output model.
 The V1 topic graph is not the V2 knowledge graph.
 
-## Near-Term Implementation Order
+## Near-Term Improvements
 
-1. Extract reusable Scout-layer tooling from V1 into a clean V2 tool boundary.
-2. Expand the existing state and router core into a full LangGraph workflow.
-3. Implement Analyst, Critic, and Writer nodes around structured outputs.
-4. Add persistence, reporting, and graph visualization.
+1. Checked-in live-run verification checklist.
+2. Expand graph inspection and rendering beyond the current artifact set.
+3. Harden report quality against longer real-world runs.
+4. Broaden integration coverage against live LLM and Tavily configurations.
 
 ## Current Implementation Snapshot
 
-The repository already contains:
+The repository contains a working end-to-end sensemaking pipeline:
 
-- a Python package scaffold in `sensemaking-agent/`
+- Python package scaffold in `sensemaking-agent/`
 - Pydantic-backed state models and merge helpers
-- NetworkX graph export support
-- router decision logic for conflict resolution, gap resolution, continuation,
+- NetworkX knowledge graph with export support
+- Scout acquisition tooling adapted from V1 search and scraping patterns
+- LangGraph workflow wiring: Scout → Analyst → Critic → Router → Writer
+- LLM-backed Analyst and Critic nodes with structured JSON parsing
+- Graph-grounded Writer synthesis with deterministic fallback behavior
+- Runnable CLI entry point for iterative sensemaking runs
+- Per-run artifact persistence: initial state, checkpoints, final state,
+  final report, graph export, and visualization artifacts
+- Automatic resume of the latest unfinished run for the same query
+- CLI acquisition controls: dry-run mode, budget limits, Tavily key override,
+  scraper policy switches
+- Router decision logic for conflict resolution, gap resolution, continuation,
   and finalization
-- baseline tests for state and routing behavior
+- Visualization exports for GraphML, DOT, and HTML inspection
+- 123 automated tests across state, tools, nodes, workflow, persistence,
+  visualization, runtime configuration, and LLM transport behavior
 
-It does not yet contain:
+Gaps that do not block production use:
 
-- Scout acquisition tooling
-- LangGraph node wiring
-- LLM-backed Analyst, Critic, or Writer nodes
-- a runnable CLI flow
+- No checked-in live-run verification checklist yet.
+- No image-format (PNG) graph export yet.
+- No live-backend integration tests in the test suite.
 
 ## Non-Goals For The First Build
 

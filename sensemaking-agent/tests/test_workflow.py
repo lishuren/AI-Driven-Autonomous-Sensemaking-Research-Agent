@@ -16,11 +16,13 @@ The tests verify:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from sensemaking_agent.database import RunArtifactStore
 from sensemaking_agent.graph import RouterConfig
 from sensemaking_agent.state import build_initial_state
 from sensemaking_agent.tools.scout_tool import ScoutTool
@@ -29,7 +31,66 @@ from sensemaking_agent.tools.scraper_tool import ScraperTool
 from sensemaking_agent.workflow import build_workflow
 
 _LLM_PATCH = "sensemaking_agent.nodes.analyst_node.generate_text"
+_CRITIC_PATCH = "sensemaking_agent.nodes.critic_node.generate_text"
+_WRITER_PATCH = "sensemaking_agent.nodes.writer_node.generate_text"
 _EMPTY_EXTRACTION = json.dumps({"entities": [], "triplets": []})
+_EMPTY_CRITIC_RESULT = json.dumps({"contradictions": [], "research_gaps": []})
+_WRITER_RESPONSE = json.dumps(
+    {
+        "executive_summary": "Grid batteries stabilize renewable integration while the current graph shows limited unresolved uncertainty.",
+        "knowledge_map": [
+            {
+                "insight": "Grid batteries stabilize renewable integration.",
+                "supporting_triplet_ids": ["trip_demo"],
+            }
+        ],
+        "key_pillars": [
+            {
+                "title": "Grid stability",
+                "summary": "Battery storage acts as a stabilizing mechanism for renewable integration in the current graph.",
+                "triplet_ids": ["trip_demo"],
+            }
+        ],
+        "disputed_facts": [],
+        "strategic_gaps": [],
+        "evidence_trace": [
+            {
+                "claim": "Grid batteries stabilize renewable integration.",
+                "triplet_ids": ["trip_demo"],
+                "contradiction_ids": [],
+                "source_document_ids": ["doc_demo"],
+                "source_urls": ["https://example.com/doc1"],
+            }
+        ],
+    }
+)
+_RICH_EXTRACTION = json.dumps(
+    {
+        "entities": [
+            {
+                "canonical_name": "Grid batteries",
+                "type": "technology",
+                "aliases": ["battery storage"],
+                "description": "Grid-scale battery systems.",
+            },
+            {
+                "canonical_name": "Renewable integration",
+                "type": "process",
+                "aliases": [],
+                "description": "Adding variable renewable generation to the grid.",
+            },
+        ],
+        "triplets": [
+            {
+                "subject": "Grid batteries",
+                "predicate": "stabilize",
+                "object": "Renewable integration",
+                "evidence": "Grid batteries help stabilize renewable integration.",
+                "confidence": 0.91,
+            }
+        ],
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +237,54 @@ class TestWorkflowRun:
 
         synthesis = final.get("final_synthesis", "")
         assert "quantum computing breakthroughs" in synthesis
+
+    @pytest.mark.asyncio
+    async def test_workflow_persists_checkpoint_and_final_artifacts(
+        self, tmp_path: Path
+    ) -> None:
+        scout = _make_stubbed_scout(results=[_rich_result()])
+        config = RouterConfig(max_iterations=1)
+        store = RunArtifactStore(
+            base_dir=tmp_path,
+            query="grid storage",
+            max_iterations=1,
+        )
+        workflow = build_workflow(
+            scout_tool=scout,
+            router_config=config,
+            artifact_store=store,
+        )
+
+        initial = build_initial_state("grid storage")
+        store.save_initial_state(initial)
+
+        with patch(_LLM_PATCH, new=AsyncMock(return_value=_RICH_EXTRACTION)), patch(
+            _CRITIC_PATCH,
+            new=AsyncMock(return_value=_EMPTY_CRITIC_RESULT),
+        ), patch(
+            _WRITER_PATCH,
+            new=AsyncMock(return_value=_WRITER_RESPONSE),
+        ):
+            final = await workflow.ainvoke(initial)
+
+        checkpoint_path = store.run_dir / "checkpoint.iter-001.json"
+        final_state_path = store.run_dir / "final_state.json"
+        graph_path = store.run_dir / "graph.json"
+        report_path = store.run_dir / "report.md"
+
+        assert checkpoint_path.exists()
+        assert final_state_path.exists()
+        assert graph_path.exists()
+        assert report_path.exists()
+        assert final["metrics"]["triplet_count"] == 1
+
+        saved_state = json.loads(final_state_path.read_text(encoding="utf-8"))
+        saved_checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+
+        assert saved_state["metrics"]["triplet_count"] == 1
+        assert saved_checkpoint["state"]["metrics"]["triplet_count"] == 1
+        assert saved_checkpoint["route"] == "finalize"
+        assert "## Executive Summary" in final["final_synthesis"]
 
     @pytest.mark.asyncio
     async def test_empty_query_does_not_crash(self) -> None:

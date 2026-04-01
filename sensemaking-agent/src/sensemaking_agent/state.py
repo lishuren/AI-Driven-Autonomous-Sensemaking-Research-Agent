@@ -93,6 +93,7 @@ class ResearchState(TypedDict, total=False):
     contradictions: Annotated[list[ContradictionState], operator.add]
     research_gaps: Annotated[list[ResearchGapState], operator.add]
     current_query: str
+    user_prompt: str
     iteration_count: int
     route_history: Annotated[list[RouteRecordState], operator.add]
     metrics: MetricsState
@@ -189,18 +190,24 @@ class StateMetrics(BaseModel):
     graph_growth_ratio: float = 0.0
 
 
-def build_initial_state(current_query: str) -> ResearchState:
+def build_initial_state(
+    current_query: str,
+    *,
+    documents: list[dict[str, object]] | None = None,
+    user_prompt: str | None = None,
+) -> ResearchState:
     current_query = current_query.strip()
     if not current_query:
         raise ValueError("current_query must not be empty")
 
     state: ResearchState = {
-        "documents": [],
+        "documents": list(documents) if documents else [],
         "entities": {},
         "triplets": [],
         "contradictions": [],
         "research_gaps": [],
         "current_query": current_query,
+        "user_prompt": user_prompt or "",
         "iteration_count": 0,
         "route_history": [],
         "metrics": StateMetrics().model_dump(mode="json"),
@@ -241,6 +248,7 @@ def validate_state(
         "contradictions": validated_contradictions,
         "research_gaps": validated_gaps,
         "current_query": str(state.get("current_query", "")).strip(),
+        "user_prompt": str(state.get("user_prompt", "")),
         "iteration_count": int(state.get("iteration_count", 0)),
         "route_history": validated_routes,
         "metrics": StateMetrics.model_validate(state.get("metrics", {})).model_dump(mode="json"),
@@ -276,6 +284,7 @@ def merge_state(
         "contradictions": list(normalized_base["contradictions"]),
         "research_gaps": list(normalized_base["research_gaps"]),
         "current_query": normalized_base["current_query"],
+        "user_prompt": normalized_base.get("user_prompt", ""),
         "iteration_count": normalized_base["iteration_count"],
         "route_history": list(normalized_base["route_history"]),
         "metrics": normalized_base["metrics"],

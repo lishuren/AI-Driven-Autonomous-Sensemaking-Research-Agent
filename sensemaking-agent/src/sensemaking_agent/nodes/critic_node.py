@@ -110,18 +110,25 @@ def _priority_value(p: str) -> str:
 # Node factory
 # ---------------------------------------------------------------------------
 
-def make_critic_node(llm_config: Optional[LLMConfig] = None):
+def make_critic_node(
+    llm_config: Optional[LLMConfig] = None,
+    prompt_dir: Optional[str] = None,
+):
     """Return a Critic node callable closed over *llm_config*.
 
     Parameters
     ----------
     llm_config:
         LLM configuration.  A default ``LLMConfig`` is used when omitted.
+    prompt_dir:
+        Optional path to a custom prompts directory.  When provided, the
+        bundled ``critic_analyze.md`` is overridden by the file at
+        ``prompt_dir/critic_analyze.md`` if it exists.
     """
     _config = llm_config or LLMConfig()
 
     try:
-        _prompt_template = load_prompt(_PROMPT_NAME)
+        _prompt_template = load_prompt(_PROMPT_NAME, prompt_dir)
     except FileNotFoundError:
         logger.error(
             "Critic prompt %r not found — analysis will be skipped.", _PROMPT_NAME
@@ -160,12 +167,21 @@ def make_critic_node(llm_config: Optional[LLMConfig] = None):
             for g in state.get("research_gaps", [])
         }
 
+        # Build user_context section for prompts (from requirements background).
+        raw_user_prompt = (state.get("user_prompt") or "").strip()
+        user_context = (
+            f"\n## Additional Research Context\n\n{raw_user_prompt}\n"
+            if raw_user_prompt
+            else ""
+        )
+
         prompt = Template(_prompt_template).safe_substitute(
             query=state.get("current_query", ""),
             iteration=str(iteration),
             triplets_new=json.dumps(new_triplets, ensure_ascii=False),
             triplets_existing=json.dumps(existing_triplets, ensure_ascii=False),
             entities=json.dumps(state.get("entities") or {}, ensure_ascii=False),
+            user_context=user_context,
         )
 
         logger.debug(

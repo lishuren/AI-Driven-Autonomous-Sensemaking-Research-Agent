@@ -1,5 +1,5 @@
 You are a knowledge-graph extraction engine. Your task is to extract structured relational facts from a research document.
-
+${user_context}
 ## Document
 
 Title: ${title}

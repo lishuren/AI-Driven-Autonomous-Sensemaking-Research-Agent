@@ -109,7 +109,7 @@ Exit criteria:
 
 ## Phase 6: LangGraph Orchestration
 
-Status: started at the router layer only.
+Status: implemented for the first end-to-end pass.
 
 Deliverables:
 
@@ -128,13 +128,16 @@ Current progress:
 
 - route-decision logic is implemented
 - route-history updates are implemented
-- full LangGraph node wiring is not yet implemented
+- full LangGraph node wiring is implemented
+- CLI invocation, persisted run artifacts, and runtime acquisition controls are implemented
 
 ## Validation Note
 
 The current validation result is tracked in [implementation-progress.md](implementation-progress.md).
 
 ## Phase 7: Writer And Reporting
+
+Status: implemented for the first graph-grounded pass.
 
 Deliverables:
 
@@ -148,7 +151,15 @@ Exit criteria:
 - the final report is generated from graph state
 - unresolved disputes appear explicitly in the output
 
+Current progress:
+
+- prompt-driven Writer synthesis is implemented
+- deterministic Writer fallback generation is implemented for LLM failure paths
+- final Markdown reports are persisted through the run artifact store
+
 ## Phase 8: Visualization And Persistence
+
+Status: implemented for the current persistence and inspection milestone.
 
 Deliverables:
 
@@ -161,6 +172,13 @@ Exit criteria:
 
 - contributors can inspect graph structure and unresolved contradictions
 - long-running sessions can recover without losing meaningfully accumulated state
+
+Current progress:
+
+- JSON checkpointing and final state/report/graph persistence are implemented
+- rerunning the same query automatically resumes the latest unfinished run in the output directory
+- dedicated visualization outputs are implemented for GraphML, DOT, and a lightweight HTML viewer
+- CI now validates the offline test suite across supported Python versions
 
 ## Cross-Cutting Rules
 

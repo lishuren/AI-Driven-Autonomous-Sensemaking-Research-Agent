@@ -144,7 +144,10 @@ def _merge_entity(registry: dict[str, Any], entity: ExtractedEntity, doc_id: str
 # Node factory
 # ---------------------------------------------------------------------------
 
-def make_analyst_node(llm_config: Optional[LLMConfig] = None):
+def make_analyst_node(
+    llm_config: Optional[LLMConfig] = None,
+    prompt_dir: Optional[str] = None,
+):
     """Return an Analyst node callable closed over *llm_config*.
 
     Parameters
@@ -153,11 +156,15 @@ def make_analyst_node(llm_config: Optional[LLMConfig] = None):
         LLM configuration.  A default ``LLMConfig`` is used when omitted,
         which targets a local Ollama instance reading ``SENSEMAKING_LLM_*``
         env vars.
+    prompt_dir:
+        Optional path to a custom prompts directory.  When provided, the
+        bundled ``analyst_extract.md`` is overridden by the file at
+        ``prompt_dir/analyst_extract.md`` if it exists.
     """
     _config = llm_config or LLMConfig()
 
     try:
-        _prompt_template = load_prompt(_PROMPT_NAME)
+        _prompt_template = load_prompt(_PROMPT_NAME, prompt_dir)
     except FileNotFoundError:
         logger.error(
             "Analyst prompt %r not found — extraction will be skipped.", _PROMPT_NAME
@@ -187,6 +194,14 @@ def make_analyst_node(llm_config: Optional[LLMConfig] = None):
         merged_entities: dict[str, Any] = dict(state.get("entities") or {})
         new_triplets: list[dict[str, Any]] = []
 
+        # Build user_context section for prompts (from requirements background).
+        raw_user_prompt = (state.get("user_prompt") or "").strip()
+        user_context = (
+            f"\n## Additional Research Context\n\n{raw_user_prompt}\n"
+            if raw_user_prompt
+            else ""
+        )
+
         for doc in new_docs:
             doc_id = doc.get("document_id", "")
             content = doc.get("content", "")[: _config.max_content_chars]
@@ -196,6 +211,7 @@ def make_analyst_node(llm_config: Optional[LLMConfig] = None):
                 url=doc.get("url", ""),
                 query=doc.get("query", ""),
                 content=content,
+                user_context=user_context,
             )
 
             logger.debug("Analyst: calling LLM for document %r.", doc_id)

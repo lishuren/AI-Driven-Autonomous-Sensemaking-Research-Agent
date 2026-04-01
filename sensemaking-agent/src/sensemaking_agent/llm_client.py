@@ -136,7 +136,7 @@ async def generate_text(
     Returns the generated text string, an empty string on known API errors, or
     ``None`` when the call fails entirely.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
         generate_text_sync,

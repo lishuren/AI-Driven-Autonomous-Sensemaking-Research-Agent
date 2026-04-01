@@ -58,7 +58,7 @@ _dry_run: bool = False
 _tavily_quota_exhausted: bool = False
 
 
-def set_budget(tracker: BudgetTracker) -> None:
+def set_budget(tracker: Optional[BudgetTracker]) -> None:
     """Attach a :class:`BudgetTracker` so every API call records credit usage."""
     global _budget
     _budget = tracker
@@ -72,6 +72,14 @@ def set_dry_run(enabled: bool = True) -> None:
     """
     global _dry_run
     _dry_run = enabled
+
+
+def reset_runtime_state() -> None:
+    """Restore module-level search runtime flags to their defaults."""
+    global _budget, _dry_run, _tavily_quota_exhausted
+    _budget = None
+    _dry_run = False
+    _tavily_quota_exhausted = False
 
 
 # ---------------------------------------------------------------------------

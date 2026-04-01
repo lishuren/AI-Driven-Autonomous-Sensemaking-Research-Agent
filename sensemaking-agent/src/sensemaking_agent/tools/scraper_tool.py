@@ -103,6 +103,14 @@ def set_respect_robots(enabled: bool) -> None:
     _respect_robots = enabled
 
 
+def reset_runtime_state() -> None:
+    """Restore module-level scraper runtime flags to their defaults."""
+    global _no_scrape, _respect_robots, _robots_cache
+    _no_scrape = False
+    _respect_robots = True
+    _robots_cache = {}
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

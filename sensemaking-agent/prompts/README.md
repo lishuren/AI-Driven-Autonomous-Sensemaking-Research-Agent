@@ -2,5 +2,11 @@
 
 Prompt files for Scout, Analyst, Critic, and Writer should live here.
 
-They are intentionally not implemented yet. The first code pass focuses on the
-state contract and graph helpers that the prompt-driven nodes will depend on.
+Implemented now:
+
+- `analyst_extract.md`
+- `critic_analyze.md`
+- `writer_synthesize.md`
+
+Future additions may include Scout-specific query rewriting or tie-breaker
+generation prompts when the routing and resume flow matures further.

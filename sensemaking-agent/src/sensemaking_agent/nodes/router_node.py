@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langgraph.types import Command
 
 from ..graph import RouterConfig, apply_route_decision, should_continue
-from ..state import ResearchState
+from ..state import ResearchState, merge_state, validate_state
+
+if TYPE_CHECKING:
+    from ..database import RunArtifactStore
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +33,10 @@ _ROUTE_TO_NODE: dict[str, str] = {
 }
 
 
-def make_router_node(config: RouterConfig | None = None):
+def make_router_node(
+    config: RouterConfig | None = None,
+    artifact_store: RunArtifactStore | None = None,
+):
     """Return a Router node callable closed over *config*.
 
     Parameters
@@ -42,12 +48,13 @@ def make_router_node(config: RouterConfig | None = None):
     _config = config or RouterConfig()
 
     def router_node(state: ResearchState) -> Command:
-        decision = should_continue(state, _config)
+        normalized = validate_state(state)
+        decision = should_continue(normalized, _config)
 
         # Apply the route decision to produce the new state fragment.
         # apply_route_decision returns a full ResearchState but we only need
         # the mutated fields (current_query and route_history).
-        updated = apply_route_decision(state, decision)
+        updated = apply_route_decision(normalized, decision)
 
         # Stamp a timestamp on whatever route record was added.
         new_route_records: list[dict[str, Any]] = []
@@ -57,17 +64,31 @@ def make_router_node(config: RouterConfig | None = None):
                 record["timestamp"] = datetime.now(timezone.utc).isoformat()
             new_route_records.append(record)
 
+        persisted_state = merge_state(
+            normalized,
+            current_query=updated["current_query"],
+            route_history=new_route_records,
+        )
+
+        if artifact_store is not None:
+            artifact_store.save_checkpoint(
+                persisted_state,
+                route=str(decision.route),
+                reason=decision.reason,
+            )
+
         destination = _ROUTE_TO_NODE.get(str(decision.route), "writer")
         logger.info(
             "Router: iteration=%d route=%s reason=%r -> %s",
-            state.get("iteration_count", 0),
+            normalized.get("iteration_count", 0),
             decision.route,
             decision.reason,
             destination,
         )
 
         update: dict[str, Any] = {
-            "current_query": updated["current_query"],
+            "current_query": persisted_state["current_query"],
+            "metrics": persisted_state["metrics"],
         }
         if new_route_records:
             update["route_history"] = new_route_records

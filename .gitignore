@@ -18,3 +18,4 @@ pip-wheel-metadata/
 .coverage.*
 htmlcov/
 .ipynb_checkpoints/
+.env
