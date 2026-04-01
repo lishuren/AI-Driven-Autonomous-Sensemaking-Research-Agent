@@ -60,3 +60,18 @@ Required JSON schema:
     }
   ]
 }
+
+Requirements:
+- Use relational verbs where possible: mitigates, depends_on, blocks, patches,
+  vulnerable_to, wraps, isolates, deprecates, supports_until.
+- Keep the executive summary concise and actionable for a developer.
+- Keep the knowledge map focused on the most informative cross-entity links.
+- Produce 3 to 5 key pillars mapped to maintenance categories.
+- If a section has little data, return an empty list rather than inventing content.
+- Keep evidence references aligned with the provided identifiers.
+
+Research query:
+$query
+${user_context}
+Structured graph context JSON:
+$context_json

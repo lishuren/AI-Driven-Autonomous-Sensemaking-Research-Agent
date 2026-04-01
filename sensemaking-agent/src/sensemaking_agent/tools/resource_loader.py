@@ -212,7 +212,7 @@ def _read_mobi(path: Path) -> Optional[str]:
         )
         return None
 
-    import tempfile
+    import shutil
 
     import mobi as _mobi  # noqa: WPS433
 
@@ -222,27 +222,30 @@ def _read_mobi(path: Path) -> Optional[str]:
         logger.warning("resource_loader: cannot extract MOBI %s — %s", path, exc)
         return None
 
-    extracted = Path(extracted_path)
-    if not extracted.exists():
-        logger.warning("resource_loader: MOBI extraction produced no output — %s", path)
-        return None
-
-    # The mobi library extracts to HTML; read and strip tags.
     try:
-        raw = extracted.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        logger.warning("resource_loader: cannot read extracted MOBI — %s", exc)
-        return None
+        extracted = Path(extracted_path)
+        if not extracted.exists():
+            logger.warning("resource_loader: MOBI extraction produced no output — %s", path)
+            return None
 
-    if _HAS_EBOOKLIB:  # reuse BS4 if available
-        from bs4 import BeautifulSoup as _BS  # noqa: WPS433
-        return _BS(raw, "html.parser").get_text(separator="\n", strip=True) or None
+        # The mobi library extracts to HTML; read and strip tags.
+        try:
+            raw = extracted.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            logger.warning("resource_loader: cannot read extracted MOBI — %s", exc)
+            return None
 
-    # Minimal fallback: strip obvious HTML tags.
-    import re
-    text = re.sub(r"<[^>]+>", " ", raw)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text or None
+        if _HAS_EBOOKLIB:  # reuse BS4 if available
+            from bs4 import BeautifulSoup as _BS  # noqa: WPS433
+            return _BS(raw, "html.parser").get_text(separator="\n", strip=True) or None
+
+        # Minimal fallback: strip obvious HTML tags.
+        import re
+        text = re.sub(r"<[^>]+>", " ", raw)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text or None
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +300,7 @@ def load_resources(resources_dir: str | Path) -> list[SourceDocument]:
         # Truncate excessively large content.
         if len(content) > _MAX_CONTENT_CHARS:
             content = content[:_MAX_CONTENT_CHARS]
-            logger.debug(
+            logger.warning(
                 "resource_loader: truncated %s to %d chars.", entry.name, _MAX_CONTENT_CHARS
             )
 
