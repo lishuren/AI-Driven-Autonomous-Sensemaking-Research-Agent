@@ -62,6 +62,12 @@ def test_build_arg_parser_accepts_runtime_controls() -> None:
     assert args.respect_robots is False
 
 
+def test_build_arg_parser_accepts_watch_flag() -> None:
+    parser = main_module._build_arg_parser()
+    args = parser.parse_args(["--query", "grid storage", "--watch"])
+    assert args.watch is True
+
+
 @pytest.mark.asyncio
 async def test_run_applies_runtime_controls_and_restores_globals(
     monkeypatch: pytest.MonkeyPatch,
@@ -84,6 +90,7 @@ async def test_run_applies_runtime_controls_and_restores_globals(
             warn_threshold=0.9,
             no_scrape=True,
             respect_robots=False,
+            constraints="Stay focused on lithium supply.",
         )
 
     assert result == "synthetic report"
@@ -103,6 +110,7 @@ async def test_run_applies_runtime_controls_and_restores_globals(
     assert kwargs["artifact_store"] is None
     assert kwargs["router_config"].max_iterations == 3
     assert isinstance(kwargs["llm_config"], LLMConfig)
+    assert captured["initial_state"]["constraints"] == "Stay focused on lithium supply."
 
     assert search_module._budget is None
     assert search_module._dry_run is False
@@ -122,29 +130,33 @@ class TestParseRequirementsFile:
             "# Title\n\n"
             "## Topic\n\nHow to do X\n\n"
             "## Research Focus\n\nFocus on Y\n\n"
-            "## Background\n\nContext about Z\n",
+            "## Background\n\nContext about Z\n\n"
+            "## Constraints\n\nAvoid migration advice\n",
             encoding="utf-8",
         )
-        query, prompt = main_module._parse_requirements_file(md)
+        query, prompt, constraints = main_module._parse_requirements_file(md)
         assert query == "How to do X"
         assert prompt is not None
         assert "Focus on Y" in prompt
         assert "Context about Z" in prompt
+        assert constraints == "Avoid migration advice"
 
     def test_heading_fallback(self, tmp_path: Path) -> None:
         md = tmp_path / "topic.md"
         md.write_text("# My Great Topic\n\nSome details here.\n", encoding="utf-8")
-        query, prompt = main_module._parse_requirements_file(md)
+        query, prompt, constraints = main_module._parse_requirements_file(md)
         assert query == "My Great Topic"
         assert prompt is not None
         assert "Some details here." in prompt
+        assert constraints is None
 
     def test_plain_text_fallback(self, tmp_path: Path) -> None:
         md = tmp_path / "topic.md"
         md.write_text("Just a plain query string", encoding="utf-8")
-        query, prompt = main_module._parse_requirements_file(md)
+        query, prompt, constraints = main_module._parse_requirements_file(md)
         assert query == "Just a plain query string"
         assert prompt is None
+        assert constraints is None
 
 
 # ---------------------------------------------------------------------------
@@ -156,19 +168,23 @@ class TestParseTopicDir:
         (tmp_path / "requirements.md").write_text(
             "## Topic\n\nMy research topic\n", encoding="utf-8"
         )
-        query, prompt, prompt_dir, resources_dir = main_module._parse_topic_dir(tmp_path)
+        query, prompt, prompt_dir, resources_dir, constraints, graphrag_dir = main_module._parse_topic_dir(tmp_path)
         assert query == "My research topic"
         assert prompt_dir is None
         assert resources_dir is None
+        assert constraints is None
+        assert graphrag_dir is None
 
     def test_discovers_prompts_and_resources(self, tmp_path: Path) -> None:
         (tmp_path / "requirements.md").write_text("## Topic\n\nX\n", encoding="utf-8")
         (tmp_path / "prompts").mkdir()
         (tmp_path / "resources").mkdir()
 
-        query, prompt, prompt_dir, resources_dir = main_module._parse_topic_dir(tmp_path)
+        query, prompt, prompt_dir, resources_dir, constraints, graphrag_dir = main_module._parse_topic_dir(tmp_path)
         assert prompt_dir == str(tmp_path / "prompts")
         assert resources_dir == str(tmp_path / "resources")
+        assert constraints is None
+        assert graphrag_dir is None
 
     def test_falls_back_to_topic_md(self, tmp_path: Path) -> None:
         (tmp_path / "topic.md").write_text("# Fallback Topic\n\nDetails\n", encoding="utf-8")
@@ -183,9 +199,29 @@ class TestParseTopicDir:
         assert query == "Some analysis"
 
     def test_folder_name_fallback(self, tmp_path: Path) -> None:
-        query, prompt, prompt_dir, resources_dir = main_module._parse_topic_dir(tmp_path)
+        query, prompt, prompt_dir, resources_dir, constraints, graphrag_dir = main_module._parse_topic_dir(tmp_path)
         assert query == tmp_path.name
         assert prompt is None
+        assert constraints is None
+        assert graphrag_dir is None
+
+    def test_discovers_graphrag_dir(self, tmp_path: Path) -> None:
+        (tmp_path / "requirements.md").write_text("## Topic\n\nGraph test\n", encoding="utf-8")
+        graphrag = tmp_path / "graphrag"
+        graphrag.mkdir()
+        (graphrag / "settings.yaml").write_text("completion_models: {}", encoding="utf-8")
+
+        query, prompt, prompt_dir, resources_dir, constraints, graphrag_dir = main_module._parse_topic_dir(tmp_path)
+        assert query == "Graph test"
+        assert graphrag_dir == str(graphrag)
+
+    def test_ignores_graphrag_without_settings(self, tmp_path: Path) -> None:
+        (tmp_path / "requirements.md").write_text("## Topic\n\nNo settings\n", encoding="utf-8")
+        (tmp_path / "graphrag").mkdir()
+        # No settings.yaml → should not be detected.
+
+        query, prompt, prompt_dir, resources_dir, constraints, graphrag_dir = main_module._parse_topic_dir(tmp_path)
+        assert graphrag_dir is None
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +244,11 @@ class TestArgParserTopicDir:
         parser = main_module._build_arg_parser()
         with pytest.raises(SystemExit):
             parser.parse_args(["--max-iterations", "3"])
+
+    def test_graphrag_dir_accepted(self) -> None:
+        parser = main_module._build_arg_parser()
+        args = parser.parse_args(["--query", "test", "--graphrag-dir", "/path/to/graphrag"])
+        assert args.graphrag_dir == "/path/to/graphrag"
 
 
 # ---------------------------------------------------------------------------
@@ -234,3 +275,15 @@ class TestBuildInitialStateExtensions:
 
         state = build_initial_state("test")
         assert state["user_prompt"] == ""
+
+    def test_constraints_and_watch_fields_set(self) -> None:
+        from sensemaking_agent.state import build_initial_state
+
+        state = build_initial_state(
+            "test",
+            constraints="Avoid rewrites",
+            watched_resources_dir="C:/tmp/resources",
+        )
+        assert state["constraints"] == "Avoid rewrites"
+        assert state["watched_resources_dir"] == "C:/tmp/resources"
+        assert state["watched_resources_seen"] == []

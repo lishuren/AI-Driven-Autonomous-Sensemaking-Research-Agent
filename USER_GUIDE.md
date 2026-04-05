@@ -21,6 +21,11 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 python -m pip install --upgrade pip
 pip install -e ".[dev]"
 python -m playwright install chromium
+
+# Optional: install graphragloader for local corpus indexing
+cd ../graphragloader
+pip install -e ".[all]"
+cd ../sensemaking-agent
 ```
 
 Notes:
@@ -153,12 +158,18 @@ The simplest approach is to use a self-contained topic folder.  The included
 
 ```bash
 cd sensemaking-agent
+
+# Optional: build a GraphRAG index from local resources first
+cd ../topicexample && graphragloader index --source resources --target graphrag && cd ../sensemaking-agent
+
 python -m sensemaking_agent --topic-dir ../topicexample
 ```
 
 The agent auto-discovers `requirements.md`, loads `.env`, applies `prompts/`
-overrides, reads local `resources/`, and writes output to `output/` — all
-inside the topic folder.  No other flags are needed.
+overrides, reads local `resources/`, detects `graphrag/` for corpus querying,
+and writes output to `output/` — all inside the topic folder.  `requirements.md` may include `## Constraints` to
+keep follow-up research bounded, and `--watch` can be added to ingest newly
+added resource files on later iterations without restarting the run.
 
 ### Option B: Inline query
 
@@ -194,6 +205,8 @@ python -m sensemaking_agent --query "lithium supply chain risks" --max-iteration
 |------|---------|-------------|
 | `--query QUERY` | — | Research question or topic (mutually exclusive with `--topic-dir`) |
 | `--topic-dir DIR` | — | Self-contained topic folder with requirements.md, prompts/, resources/ |
+| `--graphrag-dir DIR` | auto | Path to a pre-built GraphRAG index directory (auto-detected in topic dirs) |
+| `--watch` | off | Poll `resources/` during the run and ingest newly added local files |
 | `--max-iterations N` | `5` | Maximum sensemaking loop iterations |
 | `--output-dir DIR` | `data/runs` | Directory for checkpoints and final artifacts |
 | `--no-persist` | off | Disable writing artifacts to disk |
@@ -223,7 +236,7 @@ All artifacts are written to `--output-dir/<run-id>/`:
 | `final_report.md` | Markdown synthesis report |
 | `knowledge_graph.graphml` | GraphML export of the knowledge graph |
 | `knowledge_graph.dot` | Graphviz DOT export |
-| `graph_viewer.html` | Self-contained HTML graph viewer |
+| `graph_viewer.html` | Self-contained HTML graph viewer with contradictions, gaps, and local resource provenance |
 
 ## 10. Automatic resume
 

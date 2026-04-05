@@ -94,6 +94,9 @@ class ResearchState(TypedDict, total=False):
     research_gaps: Annotated[list[ResearchGapState], operator.add]
     current_query: str
     user_prompt: str
+    constraints: str
+    watched_resources_dir: str
+    watched_resources_seen: Annotated[list[str], operator.add]
     iteration_count: int
     route_history: Annotated[list[RouteRecordState], operator.add]
     metrics: MetricsState
@@ -195,6 +198,8 @@ def build_initial_state(
     *,
     documents: list[dict[str, object]] | None = None,
     user_prompt: str | None = None,
+    constraints: str | None = None,
+    watched_resources_dir: str | None = None,
 ) -> ResearchState:
     current_query = current_query.strip()
     if not current_query:
@@ -208,6 +213,9 @@ def build_initial_state(
         "research_gaps": [],
         "current_query": current_query,
         "user_prompt": user_prompt or "",
+        "constraints": constraints or "",
+        "watched_resources_dir": watched_resources_dir or "",
+        "watched_resources_seen": [],
         "iteration_count": 0,
         "route_history": [],
         "metrics": StateMetrics().model_dump(mode="json"),
@@ -249,6 +257,9 @@ def validate_state(
         "research_gaps": validated_gaps,
         "current_query": str(state.get("current_query", "")).strip(),
         "user_prompt": str(state.get("user_prompt", "")),
+        "constraints": str(state.get("constraints", "")),
+        "watched_resources_dir": str(state.get("watched_resources_dir", "")),
+        "watched_resources_seen": [str(p) for p in state.get("watched_resources_seen", [])],
         "iteration_count": int(state.get("iteration_count", 0)),
         "route_history": validated_routes,
         "metrics": StateMetrics.model_validate(state.get("metrics", {})).model_dump(mode="json"),
@@ -273,6 +284,7 @@ def merge_state(
     current_query: str | None = None,
     iteration_count: int | None = None,
     final_synthesis: str | None = None,
+    constraints: str | None = None,
 ) -> ResearchState:
     normalized_base = validate_state(base_state)
     previous_metrics = StateMetrics.model_validate(normalized_base.get("metrics", {}))
@@ -285,6 +297,9 @@ def merge_state(
         "research_gaps": list(normalized_base["research_gaps"]),
         "current_query": normalized_base["current_query"],
         "user_prompt": normalized_base.get("user_prompt", ""),
+        "constraints": normalized_base.get("constraints", ""),
+        "watched_resources_dir": normalized_base.get("watched_resources_dir", ""),
+        "watched_resources_seen": list(normalized_base.get("watched_resources_seen", [])),
         "iteration_count": normalized_base["iteration_count"],
         "route_history": list(normalized_base["route_history"]),
         "metrics": normalized_base["metrics"],
@@ -308,6 +323,8 @@ def merge_state(
         merged["iteration_count"] = iteration_count
     if final_synthesis is not None:
         merged["final_synthesis"] = final_synthesis
+    if constraints is not None:
+        merged["constraints"] = constraints
 
     merged["metrics"] = compute_metrics(
         merged, previous_metrics=previous_metrics

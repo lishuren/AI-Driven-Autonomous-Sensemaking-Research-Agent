@@ -174,6 +174,12 @@ def make_critic_node(
             if raw_user_prompt
             else ""
         )
+        raw_constraints = (state.get("constraints") or "").strip()
+        constraints = (
+            f"\n## Research Constraints\n\n{raw_constraints}\n"
+            if raw_constraints
+            else ""
+        )
 
         prompt = Template(_prompt_template).safe_substitute(
             query=state.get("current_query", ""),
@@ -182,6 +188,7 @@ def make_critic_node(
             triplets_existing=json.dumps(existing_triplets, ensure_ascii=False),
             entities=json.dumps(state.get("entities") or {}, ensure_ascii=False),
             user_context=user_context,
+            constraints=constraints,
         )
 
         logger.debug(

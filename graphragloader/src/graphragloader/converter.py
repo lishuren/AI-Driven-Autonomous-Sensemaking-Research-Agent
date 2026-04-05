@@ -1,0 +1,534 @@
+"""Document converter — transforms diverse file types into plain text for GraphRAG.
+
+Uses LlamaIndex ``SimpleDirectoryReader`` as the primary conversion engine,
+with custom readers for formats not natively supported.  Each source file is
+written as a ``.txt`` file into ``<target>/input/`` so GraphRAG can index it.
+
+Public API
+----------
+``convert_resources(source_dir, target_dir, *, include_code, max_chars)``
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import re
+import shutil
+import tempfile
+import zipfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Result model
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ConvertedDocument:
+    """Record of a single converted file."""
+    source_path: str
+    target_path: str
+    title: str
+    char_count: int
+    format: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Extension sets
+# ---------------------------------------------------------------------------
+
+# Extensions that LlamaIndex SimpleDirectoryReader handles natively.
+_LLAMAINDEX_EXTENSIONS = {
+    ".pdf", ".docx", ".epub", ".csv", ".md", ".txt",
+    ".jpg", ".jpeg", ".png",
+    ".mp3", ".mp4",
+    ".pptx", ".ppt", ".pptm",
+    ".ipynb",
+    ".hwp",
+    ".mbox",
+}
+
+# Plain text extensions we handle directly (fast, no deps).
+_PLAINTEXT_EXTENSIONS = {
+    ".md", ".txt", ".text", ".rst", ".csv", ".tsv", ".log",
+    ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".xml", ".html", ".htm",
+}
+
+# Source code extensions (handled by code_analyzer when include_code=True).
+_CODE_EXTENSIONS = {
+    ".py", ".js", ".ts", ".tsx", ".jsx",
+    ".java", ".cs", ".go", ".rs",
+    ".c", ".cpp", ".cc", ".cxx", ".h", ".hpp",
+    ".rb", ".php", ".swift", ".kt", ".scala",
+    ".sh", ".bash", ".ps1", ".bat",
+    ".sql", ".r", ".m", ".lua",
+    ".Makefile", ".Dockerfile",
+}
+
+# Excel formats handled by _read_excel().
+_EXCEL_EXTENSIONS = {".xls", ".xlsx", ".xlsb", ".xlsm", ".odf", ".ods", ".odt"}
+
+# Archive formats we can extract and recurse into.
+_ARCHIVE_EXTENSIONS = {".zip"}
+
+# Binary/media extensions that cannot be usefully read as text.
+_SKIP_EXTENSIONS = {
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",
+    ".iso", ".img", ".dmg",
+    ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz",
+    ".db", ".sqlite", ".sqlite3",
+}
+
+_MAX_CONTENT_CHARS = 200_000
+
+# MOBI support (optional dependency).
+_HAS_MOBI = False
+try:
+    import mobi as _mobi_lib  # noqa: F401
+    _HAS_MOBI = True
+except ImportError:
+    pass
+
+_HAS_BS4 = False
+try:
+    from bs4 import BeautifulSoup  # noqa: F401
+    _HAS_BS4 = True
+except ImportError:
+    pass
+
+_HAS_PANDAS = False
+try:
+    import pandas as _pd  # noqa: F401
+    _HAS_PANDAS = True
+except ImportError:
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _stable_filename(source_path: Path) -> str:
+    """Build a stable, collision-resistant output filename."""
+    digest = hashlib.sha1(str(source_path.resolve()).encode()).hexdigest()[:12]
+    stem = re.sub(r"[^\w\-.]", "_", source_path.stem)[:60]
+    return f"{stem}_{digest}.txt"
+
+
+def _read_mobi(path: Path) -> Optional[str]:
+    """Extract text from a MOBI ebook."""
+    if not _HAS_MOBI:
+        logger.info(
+            "converter: skipping MOBI %s — mobi library not installed.  "
+            "Install with: pip install 'graphragloader[mobi]'",
+            path,
+        )
+        return None
+
+    import mobi as _mobi  # noqa: WPS433
+
+    try:
+        tmpdir, extracted_path = _mobi.extract(str(path))
+    except Exception as exc:
+        logger.warning("converter: cannot extract MOBI %s — %s", path, exc)
+        return None
+
+    try:
+        extracted = Path(extracted_path)
+        if not extracted.exists():
+            logger.warning("converter: MOBI extraction produced no output — %s", path)
+            return None
+
+        raw = extracted.read_text(encoding="utf-8", errors="replace")
+
+        if _HAS_BS4:
+            from bs4 import BeautifulSoup as _BS  # noqa: WPS433
+            return _BS(raw, "html.parser").get_text(separator="\n", strip=True) or None
+
+        # Minimal fallback: strip HTML tags.
+        text = re.sub(r"<[^>]+>", " ", raw)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text or None
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _read_plaintext(path: Path) -> Optional[str]:
+    """Read a file as plain UTF-8 text."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        logger.warning("converter: cannot read %s — %s", path, exc)
+        return None
+
+
+def _read_excel(path: Path) -> Optional[str]:
+    """Convert an Excel workbook into text (one section per sheet)."""
+    if not _HAS_PANDAS:
+        logger.info(
+            "converter: skipping Excel %s — pandas not installed.  "
+            "Install with: pip install 'graphragloader[excel]'",
+            path,
+        )
+        return None
+
+    import pandas as pd  # noqa: WPS433
+
+    try:
+        sheets = pd.read_excel(path, sheet_name=None, dtype=str)
+    except Exception as exc:
+        logger.warning("converter: cannot read Excel %s — %s", path, exc)
+        return None
+
+    parts: list[str] = []
+    for sheet_name, df in sheets.items():
+        if df.empty:
+            continue
+        header = f"## Sheet: {sheet_name}\n\n"
+        # Render as a pipe-delimited table for readability.
+        table = df.fillna("").to_csv(sep="\t", index=False)
+        parts.append(header + table)
+
+    return "\n\n".join(parts) if parts else None
+
+
+def _extract_zip(
+    archive_path: Path,
+    output_dir: Path,
+    max_chars: int,
+    *,
+    include_code: bool = False,
+) -> list[ConvertedDocument]:
+    """Extract a ZIP archive into a temp dir and convert its contents."""
+    try:
+        if not zipfile.is_zipfile(archive_path):
+            logger.warning("converter: not a valid ZIP — %s", archive_path)
+            return []
+    except OSError as exc:
+        logger.warning("converter: cannot open ZIP %s — %s", archive_path, exc)
+        return []
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="graphragloader_zip_"))
+    try:
+        with zipfile.ZipFile(archive_path, "r") as zf:
+            # Guard against zip bombs: limit total extracted size to 500 MB.
+            total_size = sum(info.file_size for info in zf.infolist())
+            if total_size > 500 * 1024 * 1024:
+                logger.warning(
+                    "converter: ZIP %s too large (%d bytes uncompressed) — skipping",
+                    archive_path, total_size,
+                )
+                return []
+            zf.extractall(tmpdir)
+
+        # Recurse into the extracted directory.  We call the internal
+        # _convert_files helper directly to avoid creating a separate
+        # output dir.
+        return _convert_files(
+            source_dir=tmpdir,
+            output_dir=output_dir,
+            max_chars=max_chars,
+            include_code=include_code,
+            _archive_prefix=archive_path.name,
+        )
+    except Exception as exc:
+        logger.warning("converter: failed to process ZIP %s — %s", archive_path, exc)
+        return []
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _looks_binary(text: str, *, sample_size: int = 1024) -> bool:
+    """Heuristic: return True if *text* looks like decoded binary garbage."""
+    sample = text[:sample_size]
+    if not sample:
+        return False
+    # Count characters outside the printable ASCII + common Unicode range.
+    non_text = sum(1 for c in sample if c != '\n' and c != '\r' and c != '\t' and (ord(c) < 32 or ord(c) == 0xFFFD))
+    return (non_text / len(sample)) > 0.3
+
+
+def _build_metadata_header(path: Path) -> str:
+    """Build a metadata header prepended to each output text file."""
+    return (
+        f"Source: {path.name}\n"
+        f"Path: {path.resolve()}\n"
+        f"Format: {path.suffix.lstrip('.')}\n"
+        f"---\n\n"
+    )
+
+
+def _use_llamaindex(source_dir: Path, extensions: set[str]) -> dict[str, str]:
+    """Use LlamaIndex to read files matching *extensions* from *source_dir*.
+
+    Returns a mapping of ``{resolved_path_str: extracted_text}``.
+    """
+    try:
+        from llama_index.core import SimpleDirectoryReader
+    except ImportError:
+        logger.warning(
+            "converter: llama-index-core not installed — cannot read rich formats.  "
+            "Install with: pip install 'graphragloader'"
+        )
+        return {}
+
+    # Filter to only extensions that LlamaIndex can handle.
+    target_exts = sorted(extensions & _LLAMAINDEX_EXTENSIONS)
+    if not target_exts:
+        return {}
+
+    try:
+        reader = SimpleDirectoryReader(
+            input_dir=str(source_dir),
+            recursive=True,
+            required_exts=target_exts,
+            errors="ignore",
+        )
+        documents = reader.load_data()
+    except Exception as exc:
+        logger.warning("converter: LlamaIndex load failed — %s", exc)
+        return {}
+
+    results: dict[str, str] = {}
+    for doc in documents:
+        file_path = (doc.metadata or {}).get("file_path", "")
+        if not file_path:
+            continue
+        # LlamaIndex may split a file into multiple documents; concatenate.
+        key = str(Path(file_path).resolve())
+        existing = results.get(key, "")
+        text = doc.text or ""
+        results[key] = (existing + "\n\n" + text).strip() if existing else text
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def convert_resources(
+    source_dir: str | Path,
+    target_dir: str | Path,
+    *,
+    include_code: bool = False,
+    max_chars: int = _MAX_CONTENT_CHARS,
+) -> list[ConvertedDocument]:
+    """Convert all supported files in *source_dir* to text in ``<target_dir>/input/``.
+
+    Parameters
+    ----------
+    source_dir:
+        Directory containing local resource files (scanned recursively).
+    target_dir:
+        GraphRAG project root.  Converted text files are placed in
+        ``<target_dir>/input/``.
+    include_code:
+        If ``True``, source code files are analysed and converted via
+        ``code_analyzer``.  Requires the ``[code]`` optional dependency.
+    max_chars:
+        Maximum characters per output file.  Longer content is truncated.
+
+    Returns
+    -------
+    list[ConvertedDocument]
+        One record per successfully converted file.
+    """
+    src = Path(source_dir)
+    if not src.is_dir():
+        logger.warning("converter: source directory does not exist — %s", src)
+        return []
+
+    output_dir = Path(target_dir) / "input"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    return _convert_files(
+        source_dir=src,
+        output_dir=output_dir,
+        max_chars=max_chars,
+        include_code=include_code,
+    )
+
+
+def _convert_files(
+    source_dir: Path,
+    output_dir: Path,
+    max_chars: int,
+    *,
+    include_code: bool = False,
+    _archive_prefix: Optional[str] = None,
+) -> list[ConvertedDocument]:
+    """Internal: convert all files in *source_dir*, write to *output_dir*."""
+    # Discover all files.
+    all_files = sorted(
+        f for f in source_dir.rglob("*")
+        if f.is_file() and not f.name.startswith(".")
+    )
+    if not all_files:
+        logger.info("converter: no files found in %s", source_dir)
+        return []
+
+    # Partition files by handling strategy.
+    llamaindex_exts: set[str] = set()
+    plaintext_files: list[Path] = []
+    mobi_files: list[Path] = []
+    code_files: list[Path] = []
+    excel_files: list[Path] = []
+    archive_files: list[Path] = []
+    fallback_files: list[Path] = []
+    llamaindex_candidates: list[Path] = []
+
+    for f in all_files:
+        ext = f.suffix.lower()
+        # Normalise Makefile/Dockerfile (no extension).
+        if f.name in ("Makefile", "Dockerfile"):
+            ext = f".{f.name}"
+
+        if include_code and ext in _CODE_EXTENSIONS:
+            code_files.append(f)
+        elif ext == ".mobi":
+            mobi_files.append(f)
+        elif ext in _EXCEL_EXTENSIONS:
+            excel_files.append(f)
+        elif ext in _ARCHIVE_EXTENSIONS:
+            archive_files.append(f)
+        elif ext in _PLAINTEXT_EXTENSIONS:
+            plaintext_files.append(f)
+        elif ext in _LLAMAINDEX_EXTENSIONS:
+            llamaindex_exts.add(ext)
+            llamaindex_candidates.append(f)
+        elif ext in _PLAINTEXT_EXTENSIONS | _CODE_EXTENSIONS:
+            # Treat unrecognised code as plain text when include_code is False.
+            plaintext_files.append(f)
+        elif ext in _SKIP_EXTENSIONS:
+            logger.debug("converter: skipping known-binary file %s", f.name)
+        else:
+            # Unknown extension — try reading as plain text.
+            fallback_files.append(f)
+
+    # Phase 1: LlamaIndex for rich formats (PDF, DOCX, EPUB, images, etc.)
+    llamaindex_results = _use_llamaindex(source_dir, llamaindex_exts) if llamaindex_exts else {}
+
+    results: list[ConvertedDocument] = []
+
+    # Write LlamaIndex results.
+    for f in llamaindex_candidates:
+        key = str(f.resolve())
+        text = llamaindex_results.get(key, "")
+        if not text or not text.strip():
+            logger.debug("converter: LlamaIndex produced no text for %s — skipping", f.name)
+            continue
+        results.append(
+            _write_output(f, text, output_dir, max_chars)
+        )
+
+    # Phase 2: plain text files (no deps needed).
+    for f in plaintext_files:
+        text = _read_plaintext(f)
+        if not text or not text.strip():
+            continue
+        results.append(
+            _write_output(f, text, output_dir, max_chars)
+        )
+
+    # Phase 3: MOBI files.
+    for f in mobi_files:
+        text = _read_mobi(f)
+        if not text or not text.strip():
+            continue
+        results.append(
+            _write_output(f, text, output_dir, max_chars)
+        )
+
+    # Phase 4: Excel files.
+    for f in excel_files:
+        text = _read_excel(f)
+        if not text or not text.strip():
+            continue
+        results.append(
+            _write_output(f, text, output_dir, max_chars, fmt="excel")
+        )
+
+    # Phase 5: ZIP archives (recursive extraction).
+    for f in archive_files:
+        extracted = _extract_zip(f, output_dir, max_chars, include_code=include_code)
+        results.extend(extracted)
+
+    # Phase 6: source code (when requested).
+    if code_files and include_code:
+        try:
+            from .code_analyzer import analyze_code_files
+            for f in code_files:
+                text = analyze_code_files(f)
+                if text and text.strip():
+                    results.append(
+                        _write_output(f, text, output_dir, max_chars, fmt="code")
+                    )
+        except ImportError:
+            logger.info(
+                "converter: code_analyzer not available — treating %d code files as plain text.",
+                len(code_files),
+            )
+            for f in code_files:
+                text = _read_plaintext(f)
+                if text and text.strip():
+                    results.append(
+                        _write_output(f, text, output_dir, max_chars, fmt="code")
+                    )
+
+    # Phase 7: unknown extensions — try reading as plain text.
+    for f in fallback_files:
+        text = _read_plaintext(f)
+        if text and text.strip():
+            # Check if the content looks like binary garbage.
+            if _looks_binary(text):
+                logger.debug("converter: %s appears binary — skipping", f.name)
+                continue
+            results.append(
+                _write_output(f, text, output_dir, max_chars, fmt="txt")
+            )
+        else:
+            logger.debug("converter: no usable text from %s — skipping", f.name)
+
+    label = f" (from {_archive_prefix})" if _archive_prefix else ""
+    logger.info(
+        "converter: converted %d files from %s%s → %s",
+        len(results), source_dir, label, output_dir,
+    )
+    return results
+
+
+def _write_output(
+    source: Path,
+    text: str,
+    output_dir: Path,
+    max_chars: int,
+    *,
+    fmt: str | None = None,
+) -> ConvertedDocument:
+    """Write a single converted document to the output directory."""
+    if len(text) > max_chars:
+        text = text[:max_chars]
+        logger.warning("converter: truncated %s to %d chars.", source.name, max_chars)
+
+    header = _build_metadata_header(source)
+    full_text = header + text
+
+    out_name = _stable_filename(source)
+    out_path = output_dir / out_name
+    out_path.write_text(full_text, encoding="utf-8")
+
+    return ConvertedDocument(
+        source_path=str(source.resolve()),
+        target_path=str(out_path.resolve()),
+        title=source.name,
+        char_count=len(text),
+        format=fmt or source.suffix.lstrip(".") or "txt",
+        metadata={"size_bytes": source.stat().st_size},
+    )

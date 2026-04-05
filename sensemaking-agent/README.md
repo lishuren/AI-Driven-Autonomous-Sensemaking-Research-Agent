@@ -15,6 +15,7 @@ Current scope:
 - per-run artifact persistence with automatic resume
 - visualization exports for GraphML, DOT, and HTML inspection
 - CLI runtime controls for dry-run, budget, Tavily key override, and scraper behavior
+- GraphRAG local-corpus integration via `graphragloader` companion package
 - comprehensive offline test coverage across state, tools, nodes, workflow, persistence, visualization, and LLM transport
 
 Planned next layers:
@@ -22,3 +23,4 @@ Planned next layers:
 - checked-in live-run verification guidance
 - richer graph rendering and inspection workflows
 - broader live-backend integration coverage
+- end-to-end live validation of GraphRAG index + query pipeline

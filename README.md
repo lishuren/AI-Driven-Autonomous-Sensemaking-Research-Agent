@@ -20,8 +20,9 @@ The core sensemaking pipeline is implemented and runnable end-to-end.
 - Per-run artifact persistence — checkpoints, final report, graph export, HTML viewer.
 - Automatic resume of the latest unfinished run for the same query.
 - CLI acquisition controls: dry-run, budget limits, Tavily key override, scraper policy.
+- GraphRAG local-corpus integration — Scout queries a pre-built index before web search.
 - Visualization exports for GraphML, DOT, and a lightweight HTML viewer.
-- 123 automated tests across state, tools, nodes, workflow, persistence, and LLM transport.
+- 164 automated tests (sensemaking-agent) + 78 automated tests (graphragloader).
 
 ## Quick Start
 
@@ -40,6 +41,10 @@ The core sensemaking pipeline is implemented and runnable end-to-end.
 cd sensemaking-agent
 pip install -e ".[dev]"
 python -m playwright install chromium
+
+# Optional: install graphragloader for local corpus indexing
+cd ../graphragloader
+pip install -e ".[all]"
 ```
 
 ### Configure
@@ -88,6 +93,9 @@ python -m sensemaking_agent --query "climate tipping points" --no-scrape
 # Resume an interrupted run automatically (re-run the same command)
 python -m sensemaking_agent --query "lithium supply chain risks" \
   --output-dir ./data/runs
+
+# Use a pre-built GraphRAG index for local corpus grounding
+python -m sensemaking_agent --query "key findings" --graphrag-dir ./my-corpus/graphrag
 ```
 
 To check your Tavily credit balance at any time:
@@ -102,6 +110,8 @@ python sensemaking-agent/check_tavily_usage.py
 |------|---------|-------------|
 | `--query QUERY` | — | Research question or topic (mutually exclusive with `--topic-dir`) |
 | `--topic-dir DIR` | — | Self-contained topic folder with requirements.md, prompts/, resources/ |
+| `--graphrag-dir DIR` | auto | Path to a pre-built GraphRAG index directory (auto-detected in topic dirs) |
+| `--watch` | off | Poll `resources/` during the run and ingest newly added local files on later iterations |
 | `--max-iterations N` | `5` | Maximum sensemaking loop iterations |
 | `--output-dir DIR` | `data/runs` | Directory for checkpoints and final artifacts |
 | `--no-persist` | off | Disable writing artifacts to disk |
@@ -142,21 +152,31 @@ Instead of passing `--query` with many flags, create a self-contained folder:
 ```text
 my-topic/
 ├── .env              ← API keys and budget (auto-loaded, gitignored)
-├── requirements.md   ← topic spec (## Topic, ## Research Focus, ## Background)
+├── requirements.md   ← topic spec (## Topic, ## Research Focus, ## Background, ## Constraints)
 ├── prompts/          ← optional prompt template overrides
 ├── resources/        ← optional local PDFs, Word docs, Markdown, text
+├── graphrag/         ← optional pre-built GraphRAG index (auto-detected by Scout)
 └── output/           ← auto-created; run artifacts go here
 ```
 
 Run with:
 
 ```bash
+# Prepare the GraphRAG index from local resources (optional, one-time)
+cd my-topic && graphragloader index --source resources --target graphrag && cd ..
+
 python -m sensemaking_agent --topic-dir ./my-topic
 ```
 
 No `--query`, `--output-dir`, or `--prompt-dir` needed — all paths are derived
 from the folder layout.  Local documents in `resources/` are loaded as seed
-documents into the knowledge graph before the first web search.
+documents into the knowledge graph before the first web search.  If a `graphrag/`
+directory with a `settings.yaml` is present, Scout automatically queries the
+local GraphRAG index before web searches for richer corpus-grounded context.  If
+`requirements.md` includes a `## Constraints` section, that text is preserved in
+state, added to Critic analysis, and used to keep follow-up Scout searches from
+drifting.  Use `--watch` to pick up new files dropped into `resources/` while a
+run is still active.
 
 See `topicexample/` for a complete working example.
 
@@ -219,6 +239,9 @@ Scout when new gaps or disputes are discovered.
 │   ├── report-spec.md
 │   ├── reuse-from-v1.md
 │   └── implementation-plan.md
+├── graphragloader/              ← companion package: convert files → GraphRAG index
+│   ├── src/graphragloader/
+│   └── tests/
 ├── sensemaking-agent/
 │   ├── .env                  ← API keys — gitignored, copy from topicexample/.env
 │   ├── check_tavily_usage.py ← check Tavily credit balance
@@ -232,6 +255,7 @@ Scout when new gaps or disputes are discovered.
 │   │   ├── database/
 │   │   └── visualisation/
 │   └── tests/
+├── topicexample/             ← self-contained topic folder with GraphRAG support
 ├── CONTRIBUTING.md
 ├── USER_GUIDE.md
 └── README.md
@@ -292,6 +316,8 @@ The repository contains a working end-to-end sensemaking pipeline:
 - LLM-backed Analyst and Critic nodes with structured JSON parsing
 - Graph-grounded Writer synthesis with deterministic fallback behavior
 - Runnable CLI entry point for iterative sensemaking runs
+- **GraphRAG local-corpus integration** via the `graphragloader` companion package
+  — Scout queries a pre-built GraphRAG index before web search when available
 - Per-run artifact persistence: initial state, checkpoints, final state,
   final report, graph export, and visualization artifacts
 - Automatic resume of the latest unfinished run for the same query
@@ -300,8 +326,9 @@ The repository contains a working end-to-end sensemaking pipeline:
 - Router decision logic for conflict resolution, gap resolution, continuation,
   and finalization
 - Visualization exports for GraphML, DOT, and HTML inspection
-- 123 automated tests across state, tools, nodes, workflow, persistence,
-  visualization, runtime configuration, and LLM transport behavior
+- 164 automated tests (sensemaking-agent) + 78 automated tests (graphragloader)
+  across state, tools, nodes, workflow, persistence, visualization, runtime
+  configuration, and LLM transport behavior
 
 Gaps that do not block production use:
 

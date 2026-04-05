@@ -153,6 +153,23 @@ class LLMConfig:
 
 
 @dataclass
+class GraphRAGConfig:
+    """Configuration for an optional pre-built GraphRAG index."""
+
+    # Path to the GraphRAG project root (contains settings.yaml and output/).
+    graphrag_dir: Optional[str] = None
+
+    # Default query method: "local", "global", "drift", or "basic".
+    query_method: str = "local"
+
+    # Leiden hierarchy level for community reports.
+    community_level: int = 2
+
+    # Whether GraphRAG integration is active.
+    enabled: bool = False
+
+
+@dataclass
 class AgentConfig:
     """Top-level agent configuration bundle."""
 
@@ -160,3 +177,4 @@ class AgentConfig:
     scraper: ScraperConfig = field(default_factory=ScraperConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    graphrag: GraphRAGConfig = field(default_factory=GraphRAGConfig)

@@ -110,6 +110,12 @@ High-value reference points include:
 These should inform implementation decisions without dictating the V2 runtime
 shape.
 
+## Superseded V1 Patterns
+
+| V1 Component | V2 Replacement | Notes |
+|--|--|--|
+| `tools/resource_loader.py` (pymupdf, python-docx) | `graphragloader` package | Local file conversion now uses LlamaIndex via graphragloader; GraphRAG index replaces flat file loading as the primary local-corpus strategy |
+
 ## Hard Rule
 
 Do not modify AI-Driven-Autonomous-Research-Agent while implementing V2.

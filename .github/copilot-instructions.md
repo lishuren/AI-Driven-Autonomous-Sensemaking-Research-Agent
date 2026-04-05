@@ -136,6 +136,9 @@ When using LangGraph, prefer additive merge semantics for append-only lists.
 
 - Reuse V1 search and scraping ideas where appropriate.
 - Return normalized documents with URL, title, content, and acquisition metadata.
+- When a pre-built GraphRAG index is available (via `--graphrag-dir` or
+  auto-detected in `--topic-dir`), query it before web searches and merge
+  results into the same document schema.
 - Stay decoupled from higher-level graph logic.
 
 ### Analyst
@@ -168,6 +171,10 @@ You may reuse or adapt patterns from AI-Driven-Autonomous-Research-Agent for:
 - prompt-file organization
 - budget and retry concepts
 - normalization and result filtering
+
+The `graphragloader` companion package replaces V1's `resource_loader.py` for
+local file conversion. Local corpus access now goes through GraphRAG indexing
+and querying rather than direct file parsing.
 
 Do not reuse V1 as the main architectural template for:
 

@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 def build_workflow(
     *,
     scout_tool: ScoutTool | None = None,
+    graphrag_tool: Any | None = None,
     router_config: RouterConfig | None = None,
     llm_config: LLMConfig | None = None,
     artifact_store: RunArtifactStore | None = None,
@@ -62,6 +63,9 @@ def build_workflow(
     scout_tool:
         Optional pre-configured ``ScoutTool``.  A default instance (which
         reads ``TAVILY_API_KEY`` from the environment) is created when omitted.
+    graphrag_tool:
+        Optional ``GraphRAGTool`` instance for querying a local GraphRAG index.
+        When provided, the Scout node merges GraphRAG results with web search.
     router_config:
         Optional ``RouterConfig`` controlling iteration and saturation
         thresholds.  Defaults are used when omitted.
@@ -74,7 +78,7 @@ def build_workflow(
     graph = StateGraph(ResearchState)
 
     # Register nodes.
-    graph.add_node("scout", make_scout_node(scout_tool))
+    graph.add_node("scout", make_scout_node(scout_tool, graphrag_tool=graphrag_tool))
     graph.add_node("analyst", make_analyst_node(llm_config, prompt_dir))
     graph.add_node("critic", make_critic_node(llm_config, prompt_dir))
     graph.add_node("router", make_router_node(router_config, artifact_store=artifact_store))

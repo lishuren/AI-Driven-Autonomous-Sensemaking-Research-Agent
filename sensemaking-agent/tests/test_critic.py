@@ -236,6 +236,26 @@ class TestMakeCriticNodeLLMContradiction:
         assert con["claim_b"] == "Grid storage is the primary demand driver"
 
     @pytest.mark.asyncio
+    async def test_injects_constraints_into_prompt(self):
+        node = make_critic_node(LLMConfig())
+        state = build_initial_state("lithium supply chain", constraints="Avoid EV policy tangents")
+        state = merge_state(
+            state,
+            triplets=[_triplet(iteration=0)],
+            iteration_count=0,
+        )
+
+        with patch(
+            "sensemaking_agent.nodes.critic_node.generate_text",
+            new=AsyncMock(return_value=_critic_json()),
+        ) as mock_generate:
+            await node(state)
+
+        prompt = mock_generate.await_args.kwargs["prompt"]
+        assert "Research Constraints" in prompt
+        assert "Avoid EV policy tangents" in prompt
+
+    @pytest.mark.asyncio
     async def test_detects_research_gap(self):
         llm_response = _critic_json(
             gaps=[{

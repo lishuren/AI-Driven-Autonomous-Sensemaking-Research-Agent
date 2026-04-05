@@ -14,6 +14,7 @@ import pytest
 
 import sensemaking_agent.tools.search_tool as search_module
 from sensemaking_agent.budget import BudgetTracker
+from sensemaking_agent.nodes.scout_node import make_scout_node
 from sensemaking_agent.state import SourceDocument
 from sensemaking_agent.tools.scout_tool import ScoutTool
 from sensemaking_agent.tools.search_tool import SearchTool, set_budget, set_dry_run
@@ -275,7 +276,6 @@ class TestScoutToolAcquire:
         scout = ScoutTool(search_tool=search_tool)
         docs_first = await scout.acquire("stable query")
 
-        # Reset mock call count then call again
         mock_search.return_value = [rich]
         docs_second = await scout.acquire("stable query")
 
@@ -303,6 +303,85 @@ class TestScoutToolAcquire:
         methods = {doc.url: doc.acquisition_method for doc in docs}
         assert methods[rich["url"]] == "tavily_raw_content"
         assert methods[thin["url"]] == "tavily_extract"
+
+
+class TestScoutNode:
+    @pytest.mark.asyncio
+    async def test_scout_node_augments_query_with_entities_and_constraints(self) -> None:
+        scout_tool = AsyncMock()
+        scout_tool.acquire = AsyncMock(return_value=[])
+        node = make_scout_node(scout_tool)
+
+        state = {
+            "current_query": "legacy .NET maintenance",
+            "iteration_count": 0,
+            "constraints": "Avoid upgrade guidance",
+            "documents": [
+                {
+                    "document_id": "doc_local_1",
+                    "url": "file:///tmp/notes.md",
+                    "title": "notes.md",
+                    "content": "content",
+                    "source_type": "local_resource",
+                    "query": "",
+                    "acquisition_method": "file_read",
+                    "metadata": {"original_path": "C:/tmp/notes.md"},
+                }
+            ],
+            "entities": {
+                "NDepend": {
+                    "canonical_name": "NDepend",
+                    "aliases": [],
+                    "evidence_refs": [],
+                    "source_document_ids": ["doc_local_1"],
+                }
+            },
+        }
+
+        await node(state)
+
+        effective_query = scout_tool.acquire.await_args.args[0]
+        assert "legacy .NET maintenance" in effective_query
+        assert "NDepend" in effective_query
+        assert "Avoid upgrade guidance" in effective_query
+
+    @pytest.mark.asyncio
+    async def test_scout_node_polls_new_resource_files_when_watch_enabled(self, tmp_path) -> None:
+        resource_dir = tmp_path / "resources"
+        resource_dir.mkdir()
+        new_file = resource_dir / "notes.md"
+        new_file.write_text("hello", encoding="utf-8")
+
+        watched_doc = SourceDocument(
+            document_id="doc_local_1",
+            url=new_file.resolve().as_uri(),
+            title="notes.md",
+            content="hello",
+            source_type="local_resource",
+            query="",
+            acquisition_method="file_read",
+            metadata={"original_path": str(new_file.resolve())},
+        )
+
+        scout_tool = AsyncMock()
+        scout_tool.acquire = AsyncMock(return_value=[])
+        node = make_scout_node(scout_tool)
+
+        state = {
+            "current_query": "legacy .NET maintenance",
+            "iteration_count": 0,
+            "documents": [],
+            "entities": {},
+            "watched_resources_dir": str(resource_dir),
+            "watched_resources_seen": [],
+        }
+
+        with patch("sensemaking_agent.nodes.scout_node.load_resources", return_value=[watched_doc]):
+            result = await node(state)
+
+        assert len(result["documents"]) == 1
+        assert result["documents"][0]["document_id"] == "doc_local_1"
+        assert len(result["watched_resources_seen"]) == 1
 
 
 # ---------------------------------------------------------------------------

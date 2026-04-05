@@ -77,18 +77,20 @@ logger = logging.getLogger(__name__)
 # Requirements-file and topic-directory parsing
 # ---------------------------------------------------------------------------
 
-def _parse_requirements_file(path: Path) -> tuple[str, Optional[str]]:
-    """Parse a requirements Markdown file and extract *query* and *user_prompt*.
+def _parse_requirements_file(path: Path) -> tuple[str, Optional[str], Optional[str]]:
+    """Parse a requirements Markdown file and extract *query*, *user_prompt*, and *constraints*.
 
-    Supports ``## Topic``, ``## Research Focus``, ``## Background`` section
-    markers.  The ``## Topic`` section becomes the query string.  All other
-    non-prompt sections are joined as background context (*user_prompt*).
+    Supports ``## Topic``, ``## Research Focus``, ``## Background``,
+    ``## Constraints`` section markers.  The ``## Topic`` section becomes the
+    query string.  The ``## Constraints`` section is returned separately so it
+    can be injected into the Critic's quality gate.  All other non-prompt
+    sections are joined as background context (*user_prompt*).
 
     If no section markers are found and the file starts with a Markdown heading
     (``#``, ``##``, or ``###``), the heading text becomes the query and the
     full file content becomes background context.
 
-    Returns ``(query, user_prompt)``.
+    Returns ``(query, user_prompt, constraints)``.
     """
     raw = path.read_text(encoding="utf-8").strip()
 
@@ -114,22 +116,25 @@ def _parse_requirements_file(path: Path) -> tuple[str, Optional[str]]:
         sections[current_section] = "\n".join(current_lines).strip()
 
     user_prompt: Optional[str] = None
+    constraints: Optional[str] = None
 
     if "topic" in sections:
         query = sections["topic"]
         context_parts: list[str] = []
         for key, val in sections.items():
-            if key not in {"topic", "prompt"} and val:
+            if key not in {"topic", "prompt", "constraints"} and val:
                 context_parts.append(val)
         context = "\n\n".join(context_parts)
         user_prompt = context or None
+        constraints = sections.get("constraints") or None
     elif sections:
         # Has section markers but no ## Topic — combine everything.
         parts = ["\n".join(non_section_lines).strip()]
         for key, val in sections.items():
-            if key != "prompt" and val:
+            if key not in {"prompt", "constraints"} and val:
                 parts.append(val)
         query = "\n\n".join(p for p in parts if p)
+        constraints = sections.get("constraints") or None
     else:
         # No section markers.
         first_line = raw.split("\n")[0].strip()
@@ -143,20 +148,22 @@ def _parse_requirements_file(path: Path) -> tuple[str, Optional[str]]:
     if not query:
         query = raw
 
-    return query, user_prompt
+    return query, user_prompt, constraints
 
 
 def _parse_topic_dir(
     folder: Path,
-) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
+) -> tuple[str, Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]]:
     """Parse a self-contained topic directory.
 
-    Returns ``(query, user_prompt, prompt_dir, resources_dir)``.
+    Returns ``(query, user_prompt, prompt_dir, resources_dir, constraints, graphrag_dir)``.
 
     Convention:
     - ``requirements.md`` → ``topic.md`` → first ``*.md`` for the topic spec.
     - ``prompts/`` sub-folder → custom prompt template overrides.
     - ``resources/`` sub-folder → local research documents.
+    - ``graphrag/`` sub-folder → pre-built GraphRAG index.
+    - ``## Constraints`` section in the spec file → injected into the Critic.
     """
     prompt_dir: Optional[str] = None
     prompts_sub = folder / "prompts"
@@ -167,6 +174,11 @@ def _parse_topic_dir(
     resources_sub = folder / "resources"
     if resources_sub.is_dir():
         resources_dir = str(resources_sub)
+
+    graphrag_dir: Optional[str] = None
+    graphrag_sub = folder / "graphrag"
+    if graphrag_sub.is_dir() and (graphrag_sub / "settings.yaml").is_file():
+        graphrag_dir = str(graphrag_sub)
 
     md_file: Optional[Path] = None
     for candidate in ("requirements.md", "topic.md"):
@@ -182,12 +194,13 @@ def _parse_topic_dir(
             break
 
     if md_file is not None:
-        query, user_prompt = _parse_requirements_file(md_file)
+        query, user_prompt, constraints = _parse_requirements_file(md_file)
     else:
         query = folder.name
         user_prompt = None
+        constraints = None
 
-    return query, user_prompt, prompt_dir, resources_dir
+    return query, user_prompt, prompt_dir, resources_dir, constraints, graphrag_dir
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -295,6 +308,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Directory containing custom prompt template overrides. Files present here "
              "take precedence over the bundled prompts/ directory.",
     )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Poll the topic-dir resources/ folder during the run and ingest newly added files on later iterations.",
+    )
+    parser.add_argument(
+        "--graphrag-dir",
+        metavar="DIR",
+        help="Path to a pre-built GraphRAG index directory. "
+             "Auto-detected from <topic-dir>/graphrag/ when using --topic-dir.",
+    )
     return parser
 
 
@@ -369,6 +393,9 @@ async def run(
     prompt_dir: str | None = None,
     user_prompt: str | None = None,
     resources_dir: str | None = None,
+    constraints: str | None = None,
+    watch: bool = False,
+    graphrag_dir: str | None = None,
 ) -> str:
     """Build and invoke the sensemaking workflow for *query*.
 
@@ -391,11 +418,24 @@ async def run(
                 resources_dir,
             )
 
+    # For watch mode, the resources dir is tracked in state so the Scout
+    # can poll it on each iteration.  For non-watch mode, resource documents
+    # are already seeded so no per-iteration polling is needed.
+    watched_resources_dir: str | None = resources_dir if watch else None
+
     initial_state = build_initial_state(
         query,
         documents=seed_docs or None,
         user_prompt=user_prompt,
+        constraints=constraints,
+        watched_resources_dir=watched_resources_dir,
     )
+    if watch and seed_docs:
+        initial_state["watched_resources_seen"] = [
+            str(doc.get("metadata", {}).get("original_path", ""))
+            for doc in seed_docs
+            if str(doc.get("metadata", {}).get("original_path", "")).strip()
+        ]
     agent_config = _resolve_agent_config(
         tavily_key=tavily_key,
         max_results=max_results,
@@ -430,6 +470,16 @@ async def run(
             artifact_store = RunArtifactStore.find_latest_resumable_run(output_dir, query)
             if artifact_store is not None:
                 initial_state = artifact_store.load_resume_state()
+                if constraints and not initial_state.get("constraints"):
+                    initial_state["constraints"] = constraints
+                if watch and resources_dir:
+                    initial_state["watched_resources_dir"] = resources_dir
+                    if not initial_state.get("watched_resources_seen"):
+                        initial_state["watched_resources_seen"] = [
+                            str(doc.get("metadata", {}).get("original_path", ""))
+                            for doc in initial_state.get("documents", [])
+                            if str(doc.get("metadata", {}).get("original_path", "")).strip()
+                        ]
                 artifact_store.record_resume()
                 logger.info(
                     "Resuming existing run from %s at iteration %d.",
@@ -448,8 +498,16 @@ async def run(
         if prompt_dir is not None:
             logger.info("Custom prompt directory: %s", prompt_dir)
 
+        # Create GraphRAG tool if a graphrag directory is configured.
+        graphrag_tool = None
+        if graphrag_dir:
+            from .tools.graphrag_tool import GraphRAGTool
+            graphrag_tool = GraphRAGTool(graphrag_dir=graphrag_dir)
+            logger.info("GraphRAG integration enabled: %s", graphrag_dir)
+
         workflow = build_workflow(
             scout_tool=scout_tool,
+            graphrag_tool=graphrag_tool,
             router_config=router_config,
             llm_config=agent_config.llm,
             artifact_store=artifact_store,
@@ -496,8 +554,10 @@ def main() -> None:
     # --- Resolve topic source ------------------------------------------------
     query: str
     user_prompt: str | None = None
+    constraints: str | None = None
     prompt_dir: str | None = None
     resources_dir: str | None = None
+    graphrag_dir: str | None = None
     output_dir: str | Path | None
 
     if args.topic_dir is not None:
@@ -509,7 +569,8 @@ def main() -> None:
         # the project-level .env already loaded at module import time.
         _load_dotenv(topic_dir / ".env")
 
-        query, user_prompt, dir_prompt_dir, resources_dir = _parse_topic_dir(topic_dir)
+        query, user_prompt, dir_prompt_dir, resources_dir, constraints, dir_graphrag_dir = _parse_topic_dir(topic_dir)
+        graphrag_dir = getattr(args, "graphrag_dir", None) or dir_graphrag_dir
 
         # Convention: output always goes to <topic_dir>/output/
         output_dir = None if args.no_persist else str(topic_dir / "output")
@@ -520,6 +581,8 @@ def main() -> None:
         query = args.query
         output_dir = None if args.no_persist else args.output_dir
         prompt_dir = args.prompt_dir
+        constraints = None
+        graphrag_dir = getattr(args, "graphrag_dir", None)
 
     # CLI / env fallback for prompt_dir.
     prompt_dir = prompt_dir or os.environ.get("SENSEMAKING_PROMPT_DIR") or None
@@ -540,6 +603,9 @@ def main() -> None:
             prompt_dir=prompt_dir,
             user_prompt=user_prompt,
             resources_dir=resources_dir,
+            constraints=constraints,
+            watch=args.watch,
+            graphrag_dir=graphrag_dir,
         )
     )
     print(result)

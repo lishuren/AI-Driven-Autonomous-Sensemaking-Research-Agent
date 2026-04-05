@@ -57,6 +57,9 @@ def test_build_initial_state_sets_expected_defaults() -> None:
     assert state["current_query"] == "battery supply chain"
     assert state["documents"] == []
     assert state["entities"] == {}
+    assert state["constraints"] == ""
+    assert state["watched_resources_dir"] == ""
+    assert state["watched_resources_seen"] == []
     assert state["metrics"]["triplet_count"] == 0
     assert state["metrics"]["graph_growth_ratio"] == 0.0
 
@@ -123,7 +126,18 @@ def test_validate_state_rehydrates_missing_optional_fields() -> None:
     assert validated["contradictions"] == []
     assert validated["research_gaps"] == []
     assert validated["route_history"] == []
+    assert validated["constraints"] == ""
+    assert validated["watched_resources_seen"] == []
     assert validated["metrics"]["triplet_count"] == 0
+
+
+def test_merge_state_can_override_constraints() -> None:
+    state = merge_state(
+        build_initial_state("battery supply chain", constraints="old"),
+        constraints="new",
+    )
+
+    assert state["constraints"] == "new"
 
 
 def test_state_to_digraph_aggregates_triplets_on_same_edge() -> None:

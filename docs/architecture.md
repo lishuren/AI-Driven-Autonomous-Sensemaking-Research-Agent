@@ -31,6 +31,12 @@ This layer adapts V1 capabilities for:
 - normalization of documents
 - retry and rate-limit behavior
 
+When a pre-built GraphRAG index is available (via `--graphrag-dir` or
+auto-detected inside a `--topic-dir`), the Scout also queries the local corpus
+index before issuing web searches. GraphRAG results are converted to the same
+normalized document schema and merged with web results so the downstream
+Analyst processes all sources uniformly.
+
 The Scout layer must not own the global sensemaking state.
 
 ### 2. State layer
@@ -78,8 +84,10 @@ It should emphasize structure, influence, uncertainty, and strategic gaps.
 Initial Query
    |
    v
-Scout
-   |
+Scout ──────┐
+   |        ├── GraphRAG local index (if available)
+   |        ├── Tavily web search
+   |        └── Playwright fallback scrape
    v
 Analyst
    |
@@ -104,6 +112,8 @@ Critic
 - Tavily for search and extract
 - Playwright as browser fallback
 - Ollama or another compatible LLM endpoint
+- graphragloader — companion package for converting local files and querying a
+  Microsoft GraphRAG index (optional; used when a `graphrag/` directory exists)
 
 LangGraph is a core runtime dependency for V2.
 LangChain may be used selectively later if a narrow need appears, but it should

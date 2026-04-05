@@ -1,5 +1,6 @@
 You are a Critic agent in a sensemaking research system. Your task is to detect contradictions and research gaps by comparing new relationship triplets against an existing knowledge graph.
 ${user_context}
+${constraints}
 ## Input
 
 **Research query:** ${query}

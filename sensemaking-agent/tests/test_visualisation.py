@@ -10,7 +10,21 @@ from sensemaking_agent.visualisation import (
 
 def _sample_state():
     return merge_state(
-        build_initial_state("battery supply chain"),
+        build_initial_state(
+            "battery supply chain",
+            documents=[
+                {
+                    "document_id": "doc_001",
+                    "url": "file:///tmp/local-notes.md",
+                    "title": "local-notes.md",
+                    "content": "Lithium shortages are delaying EV production.",
+                    "source_type": "local_resource",
+                    "query": "",
+                    "acquisition_method": "file_read",
+                    "metadata": {"original_path": "C:/research/local-notes.md"},
+                }
+            ],
+        ),
         entities={
             "Lithium shortage": {
                 "type": "concept",
@@ -99,3 +113,6 @@ def test_export_html_viewer_writes_expected_content(tmp_path) -> None:
     assert "Sensemaking graph viewer" in text
     assert "Open Contradictions" in text
     assert "Research Gaps" in text
+    assert "Local Resources" in text
+    assert "local-notes.md" in text
+    assert "Linked entities" in text

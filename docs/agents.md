@@ -23,6 +23,7 @@ Acquire and normalize source material for the current query.
 - `current_query`
 - optional routing hints from contradictions or research gaps
 - budget and acquisition configuration
+- optional GraphRAG index directory for local corpus querying
 
 ### Outputs
 
@@ -33,6 +34,8 @@ Acquire and normalize source material for the current query.
 
 - perform search using V1-derived patterns
 - use extract or scrape fallbacks when needed
+- query a pre-built GraphRAG index when available, merging local corpus results
+  with web search results
 - normalize documents into a stable schema
 - avoid direct knowledge-graph logic
 

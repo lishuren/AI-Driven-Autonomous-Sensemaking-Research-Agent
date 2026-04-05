@@ -27,6 +27,12 @@ dependency lock-in, third-party component abandonment, or contractual
 obligations. The challenge is keeping the application stable, secure, and
 understandable over a multi-year horizon without touching the core framework.
 
+## Constraints
+
+- Do not turn this into a .NET upgrade or migration guide.
+- Prioritize operational maintenance, hardening, diagnostics, and supportability.
+- Prefer guidance that applies to legacy .NET Framework on Windows and IIS over .NET Core or cloud-native rewrites.
+
 Key concerns to research:
 
 - **Environment freezing** — isolating the app from OS and infrastructure drift

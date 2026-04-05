@@ -14,8 +14,10 @@ from .scraper_tool import (
     set_no_scrape,
     set_respect_robots,
 )
+from .graphrag_tool import GraphRAGTool
 
 __all__ = [
+    "GraphRAGTool",
     "ScoutTool",
     "SearchTool",
     "ScraperTool",

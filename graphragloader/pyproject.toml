@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "graphragloader"
+version = "0.1.0"
+description = "Convert diverse local files and source code into a GraphRAG knowledge graph."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "graphrag>=3.0,<4",
+    "llama-index-core>=0.13,<0.15",
+    "llama-index-readers-file>=0.4",
+]
+
+[project.scripts]
+graphragloader = "graphragloader.cli:main"
+
+[project.optional-dependencies]
+code = [
+    "tree-sitter>=0.23",
+    "tree-sitter-python>=0.23",
+    "tree-sitter-javascript>=0.23",
+    "tree-sitter-typescript>=0.23",
+    "tree-sitter-java>=0.23",
+    "tree-sitter-c-sharp>=0.23",
+    "tree-sitter-go>=0.23",
+    "tree-sitter-rust>=0.23",
+    "tree-sitter-c>=0.23",
+    "tree-sitter-cpp>=0.23",
+]
+ocr = [
+    "pytesseract>=0.3",
+    "Pillow>=10",
+]
+mobi = [
+    "mobi>=0.3",
+    "beautifulsoup4>=4.12",
+]
+excel = [
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "xlrd>=2.0",
+]
+dev = [
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.23,<1",
+]
+all = [
+    "graphragloader[code,ocr,mobi,excel,dev]",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"

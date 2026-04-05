@@ -42,6 +42,10 @@ class ResearchState(TypedDict, total=False):
     contradictions: Annotated[list[dict[str, Any]], operator.add]
     research_gaps: Annotated[list[dict[str, Any]], operator.add]
     current_query: str
+    user_prompt: str
+    constraints: str
+    watched_resources_dir: str
+    watched_resources_seen: Annotated[list[str], operator.add]
     iteration_count: int
     route_history: Annotated[list[dict[str, Any]], operator.add]
     metrics: dict[str, Any]
@@ -201,6 +205,27 @@ Example triggers:
 ### `current_query`
 
 The active search target for the next Scout pass.
+
+### `user_prompt`
+
+Background context derived from `requirements.md` sections such as
+`## Research Focus` and `## Background`. This is injected into LLM-facing nodes.
+
+### `constraints`
+
+Optional guardrails derived from a `## Constraints` section in `requirements.md`.
+This field is carried through the workflow so Critic analysis and Scout query
+shaping can stay aligned with the user's intended scope.
+
+### `watched_resources_dir`
+
+Optional runtime-only path used when `--watch` is enabled. It tells Scout where
+to poll for newly added local resource files between iterations.
+
+### `watched_resources_seen`
+
+Append-only list of local file paths already observed during a watch-mode run.
+This prevents the same resource from being re-ingested every iteration.
 
 ### `iteration_count`
 

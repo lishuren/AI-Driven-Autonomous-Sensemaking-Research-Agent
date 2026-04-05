@@ -16,10 +16,11 @@ frequently as the codebase moves forward.
 
 ## Current Status
 
-Phase: working end-to-end implementation with persistence, resume, and inspection artifacts
+Phase: working end-to-end implementation with GraphRAG local-corpus integration
 
 The repository has moved beyond planning and now contains a working Python
-foundation for the state, routing, reporting, and artifact layers.
+foundation for the state, routing, reporting, artifact layers, and GraphRAG-based
+local corpus indexing and querying.
 
 ## Completed
 
@@ -55,7 +56,7 @@ foundation for the state, routing, reporting, and artifact layers.
 
 - project dependencies installed with Python 3.12.9
 - current automated test suite passes
-- latest result: `123 passed`
+- latest result: `164 passed` (sensemaking-agent) + `78 passed` (graphragloader)
 
 ## Current Code Surface
 
@@ -86,24 +87,43 @@ Implemented now:
 - `prompts/critic_analyze.md`: contradiction and gap detection prompt (both-sides evidence preservation, severity and priority scoring rules, strict JSON output schema)
 - `prompts/writer_synthesize.md`: graph-grounded report synthesis prompt with strict JSON output requirements
 - `workflow.py`: builds and compiles the `StateGraph`; accepts `llm_config`
-- `main.py`: CLI entry point (`--query`, `--max-iterations`, `--log-level`, `--output-dir`, `--no-persist`, `--dry-run`, `--tavily-key`, `--max-results`, `--max-queries`, `--max-credits`, `--warn-threshold`, `--no-scrape`, `--respect-robots`, `--no-respect-robots`)
+- `main.py`: CLI entry point (`--query`, `--topic-dir`, `--watch`, `--graphrag-dir`, `--max-iterations`, `--log-level`, `--output-dir`, `--no-persist`, `--dry-run`, `--tavily-key`, `--max-results`, `--max-queries`, `--max-credits`, `--warn-threshold`, `--no-scrape`, `--respect-robots`, `--no-respect-robots`)
 - Analyst tests: parse_extraction, triplet_id, merge_entity helpers, full node integration (LLM stubbed)
 - Critic tests (`tests/test_critic.py`): id helpers, parse helpers, iteration filtering, deduplication, contradiction detection, gap detection, missing prompt fallback (all LLM-stubbed, 28 new tests)
 - Writer tests (`tests/test_writer.py`): bounded context preparation, output parsing, LLM-backed synthesis, malformed-output fallback, and empty-graph fallback
 - persistence tests: artifact store output, automatic resume behavior, and workflow-integrated checkpoint/final artifact coverage
-- visualization tests (`tests/test_visualisation.py`): GraphML, DOT, and HTML artifact export coverage
-- runtime wiring tests (`tests/test_main.py`): parser coverage, CLI-to-tool runtime configuration checks, `_parse_requirements_file` section and heading parsing, `_parse_topic_dir` convention discovery, mutually-exclusive `--query`/`--topic-dir` args, `build_initial_state` with pre-seeded documents and user_prompt
+- visualization tests (`tests/test_visualisation.py`): GraphML, DOT, and HTML artifact export coverage, including local resource provenance in the viewer
+- runtime wiring tests (`tests/test_main.py`): parser coverage, CLI-to-tool runtime configuration checks, `_parse_requirements_file` section and heading parsing, `_parse_topic_dir` convention discovery, mutually-exclusive `--query`/`--topic-dir` args, `build_initial_state` with pre-seeded documents, user_prompt, constraints, and watch-mode state
 - resource loader tests (`tests/test_resource_loader.py`): text file loading, empty/nonexistent dirs, unsupported extensions, content truncation
 - low-level LLM transport tests (`tests/test_llm_client.py`): Ollama path, OpenAI-compatible path, empty response handling, failure fallback, and async executor path
 - `--topic-dir` CLI support: self-contained research folder convention with auto-discovered requirements.md, prompts/, resources/, output/; `.env` auto-loaded from topic dir
-- `_parse_requirements_file()`: section-based parsing (`## Topic`, `## Research Focus`, `## Background`), heading fallback, backward compatibility
+- `_parse_requirements_file()`: section-based parsing (`## Topic`, `## Research Focus`, `## Background`, `## Constraints`), heading fallback, backward compatibility
 - `_parse_topic_dir()`: convention-based discovery of requirements.md/topic.md/first *.md, prompts/ and resources/ subdirs
 - resource loader (`tools/resource_loader.py`): flat directory scan of local PDF, DOCX, Markdown, and text files into `SourceDocument` entries; pymupdf + pytesseract OCR for scanned PDFs; python-docx for Word files; all optional deps with graceful degradation
 - `ResearchState.user_prompt`: background context field set from requirements.md, injected into all LLM node prompts via `$user_context` template variable
-- `build_initial_state()` extended with `documents` and `user_prompt` kwargs for pre-seeding state with local resources
-- `topicexample/` overhauled: real `.env` (gitignored), `resources/` folder, simplified `run.ps1`/`run.sh` using `--topic-dir`, section-reordered `requirements.md` (Topic → Research Focus → Background)
+- `ResearchState.constraints`: optional guardrail field set from `## Constraints`, injected into Critic analysis and used to shape Scout query expansion
+- watch-mode resource tracking: `watched_resources_dir` and `watched_resources_seen` fields let Scout ingest newly added files from `resources/` between iterations
+- Scout query expansion: entities grounded in local resources are appended to later web queries so follow-up search is more resource-aware
+- `build_initial_state()` extended with `documents`, `user_prompt`, `constraints`, and watch-mode kwargs for pre-seeding state with local resources
+- `topicexample/` overhauled: real `.env` (gitignored), `resources/` folder, simplified `run.ps1`/`run.sh` using `--topic-dir`, section-reordered `requirements.md` (Topic → Research Focus → Background → Constraints)
 - `.gitignore` updated with `.env` at root and `topicexample/.gitignore` for `.env` and `output/`
 - Workflow tests: all patched for offline LLM where documents are processed
+- **graphragloader companion package** (`graphragloader/`): standalone package for converting local files into a Microsoft GraphRAG index and querying it
+  - `converter.py`: LlamaIndex-based file-to-text conversion (PDF, DOCX, EPUB, PPTX, images, notebooks) with stable filenames and metadata headers
+  - `code_analyzer.py`: Python ast + tree-sitter structural extraction for source code files
+  - `settings.py`: GraphRAG settings.yaml and .env generation with Ollama and OpenAI provider support
+  - `indexer.py`: async indexing wrapper with change detection (file hashes + state tracking) and CLI fallback
+  - `query.py`: async local/global/drift/basic search dispatch against GraphRAG parquet output
+  - `cli.py`: `graphragloader init|convert|index|query` entry points
+- **GraphRAG integration in sensemaking-agent**:
+  - `tools/graphrag_tool.py`: `GraphRAGTool` dataclass wrapping `graphragloader.query()` with `SourceDocumentState`-compatible output
+  - `config.py`: `GraphRAGConfig` dataclass and `graphrag` field on `AgentConfig`
+  - `nodes/scout_node.py`: `make_scout_node()` accepts optional `graphrag_tool`, queries GraphRAG before web search, merges results
+  - `workflow.py`: `build_workflow()` passes `graphrag_tool` through to Scout node
+  - `main.py`: `_parse_topic_dir()` auto-detects `graphrag/` with `settings.yaml`; `--graphrag-dir` CLI arg; `run()` creates `GraphRAGTool` when path is available
+- graphragloader tests (78): converter, code_analyzer, settings, indexer, query, CLI
+- sensemaking-agent GraphRAG tests: `test_graphrag_tool.py` (8 tests), `test_main.py` GraphRAG discovery tests (3 tests)
+- `topicexample/` updated: `prepare.ps1`/`prepare.sh` for GraphRAG indexing, `graphrag/.gitignore`, updated README and resources docs
 
 Not implemented yet:
 
@@ -113,22 +133,25 @@ Not implemented yet:
 
 ## Current Validation Status
 
-Validated on 2026-04-02:
+Validated on 2026-04-06:
 
-- `..\.venv\Scripts\python.exe -m pytest tests -q`
-- result: `143 passed in 1.17s`
-- run from `sensemaking-agent/` directory
+- sensemaking-agent: `164 passed in 1.81s`
+- graphragloader: `78 passed in 1.18s`
+- run from respective package directories
 
 Known note:
 
 - `python` on PATH still resolves to the Windows Store shim in this environment
-- use the concrete interpreter path or `..\.venv\Scripts\python.exe` when validating
+- use the concrete interpreter path or `..\.\.venv\\Scripts\\python.exe` when validating
+- on Windows, always specify `encoding="utf-8"` for text file reads (default is GBK)
 
 ## Next Recommended Steps
 
 1. Add a checked-in live-run verification checklist for Tavily and LLM-backed runs
 2. Expand graph rendering and inspection beyond the current GraphML, DOT, and HTML artifacts
 3. Broaden integration coverage for real backend configurations and longer end-to-end runs
+4. End-to-end live validation of graphragloader index + query pipeline with real LLM
+5. Publish graphragloader to PyPI for standalone installation
 
 ## Blockers
 
@@ -198,3 +221,24 @@ When work continues on a later day:
 - updated `README.md` and `USER_GUIDE.md` with `--topic-dir` documentation
 - added 20 new tests: `_parse_requirements_file`, `_parse_topic_dir`, arg parser, resource loader, `build_initial_state` extensions
 - revalidated the full suite at `143 passed`
+
+### 2026-04-06
+
+- created `graphragloader/` companion package for local corpus conversion and GraphRAG indexing
+  - `converter.py`: LlamaIndex-based multi-format file conversion with stable filenames and metadata
+  - `code_analyzer.py`: Python ast + tree-sitter code structural extraction
+  - `settings.py`: GraphRAG settings.yaml generation (Ollama and OpenAI providers)
+  - `indexer.py`: async indexing with file-hash change detection and CLI fallback
+  - `query.py`: async local/global/drift/basic search dispatch
+  - `cli.py`: `graphragloader init|convert|index|query` subcommands
+  - `pyproject.toml`, `README.md`, `__init__.py` with full public API
+- integrated GraphRAG into sensemaking-agent
+  - `tools/graphrag_tool.py`: `GraphRAGTool` wrapping graphragloader query with SourceDocument output
+  - `config.py`: added `GraphRAGConfig` dataclass and field on `AgentConfig`
+  - `nodes/scout_node.py`: Scout queries GraphRAG before web search when tool available
+  - `workflow.py`: passes `graphrag_tool` through to Scout node
+  - `main.py`: `_parse_topic_dir()` auto-detects `graphrag/` directory; added `--graphrag-dir` CLI arg
+- updated `topicexample/`: added `prepare.ps1`/`prepare.sh` indexing scripts, `graphrag/.gitignore`, updated README and resources docs
+- created comprehensive test suites: 78 tests for graphragloader, 11 new tests for sensemaking-agent
+- updated architecture.md, agents.md, reuse-from-v1.md, implementation-progress.md
+- revalidated: sensemaking-agent `164 passed`, graphragloader `78 passed`

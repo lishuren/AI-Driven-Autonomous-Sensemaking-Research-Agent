@@ -148,6 +148,11 @@ def export_html_viewer(
     .card .value {{ font-size: 22px; font-weight: 700; margin-top: 4px; }}
     ul {{ padding-left: 18px; }}
     li {{ margin-bottom: 8px; }}
+        .resource-list {{ display: grid; gap: 12px; }}
+        .resource {{ background: #ffffff; border: 1px solid #d6def0; border-radius: 12px; padding: 12px; }}
+        .resource-title {{ font-weight: 700; margin-bottom: 4px; }}
+        .resource-meta {{ color: #55627a; font-size: 12px; margin-bottom: 8px; word-break: break-word; }}
+        .resource-line {{ font-size: 13px; margin-bottom: 6px; }}
     .empty {{ color: #6d788c; font-style: italic; }}
   </style>
 </head>
@@ -178,6 +183,8 @@ def export_html_viewer(
       {_render_contradictions(contradictions)}
       <h2>Research Gaps</h2>
       {_render_gaps(gaps)}
+            <h2>Local Resources</h2>
+            {_render_local_resources(normalized)}
     </aside>
   </div>
 </body>
@@ -289,6 +296,48 @@ def _render_gaps(items: list[Mapping[str, Any]]) -> str:
         )
     lines.append("</ul>")
     return "".join(lines)
+
+
+def _render_local_resources(state: Mapping[str, Any]) -> str:
+    local_resources = [
+        item for item in state.get("documents", [])
+        if item.get("source_type") == "local_resource"
+    ]
+    if not local_resources:
+        return '<div class="empty">No local resource documents were loaded.</div>'
+
+    entity_registry = state.get("entities", {})
+    triplets = list(state.get("triplets", []))
+    cards: list[str] = ['<div class="resource-list">']
+
+    for document in local_resources[:12]:
+        document_id = str(document.get("document_id", ""))
+        metadata = document.get("metadata", {}) or {}
+        original_path = html.escape(str(metadata.get("original_path", document.get("url", ""))))
+        linked_entities = sorted(
+            name
+            for name, entity in entity_registry.items()
+            if document_id in entity.get("source_document_ids", [])
+        )
+        linked_triplets = [
+            triplet for triplet in triplets
+            if triplet.get("source_document_id") == document_id
+        ]
+        predicates = sorted({str(item.get("predicate", "")).strip() for item in linked_triplets if str(item.get("predicate", "")).strip()})
+
+        cards.append(
+            "<div class=\"resource\">"
+            f"<div class=\"resource-title\">{html.escape(str(document.get('title', 'Untitled resource')))}</div>"
+            f"<div class=\"resource-meta\">{original_path}</div>"
+            f"<div class=\"resource-line\"><strong>Acquisition:</strong> {html.escape(str(document.get('acquisition_method', 'unknown')))}</div>"
+            f"<div class=\"resource-line\"><strong>Linked entities:</strong> {html.escape(', '.join(linked_entities) if linked_entities else 'None yet')}</div>"
+            f"<div class=\"resource-line\"><strong>Linked relationships:</strong> {len(linked_triplets)}"
+            f" ({html.escape(', '.join(predicates) if predicates else 'no extracted predicates yet')})</div>"
+            "</div>"
+        )
+
+    cards.append("</div>")
+    return "".join(cards)
 
 
 def _dot_attrs(attrs: Mapping[str, Any]) -> str:
