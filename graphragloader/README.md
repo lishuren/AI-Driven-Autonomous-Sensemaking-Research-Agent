@@ -15,6 +15,11 @@ graphragloader index --source ./resources --target ./graphrag
 graphragloader query --target ./graphrag --question "What are the key findings?"
 ```
 
+## Operations Runbook
+
+For Windows-focused operational guidance (dependency issues, long-run indexing,
+warnings, and troubleshooting), see [RUNBOOK.md](RUNBOOK.md).
+
 ## Supported File Types
 
 | Category | Extensions |
