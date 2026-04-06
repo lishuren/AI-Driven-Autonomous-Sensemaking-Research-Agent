@@ -57,6 +57,9 @@ class SettingsConfig:
     # Snapshots.
     export_graphml: bool = False
 
+    # LLM request timeout in seconds (default 1800 = 30 min, suits large local models).
+    request_timeout: int = 1800
+
     # Extra fields.
     language: Optional[str] = None
 
@@ -152,6 +155,7 @@ def _build_yaml(
             f"    api_base: {api_base}\n"
             f"    auth_method: api_key\n"
             f"    api_key: ollama\n"
+            f"    request_timeout: {cfg.request_timeout}\n"
         )
     else:
         completion_block = (
@@ -160,6 +164,7 @@ def _build_yaml(
             f"    model: {cfg.llm_model}\n"
             f"    auth_method: api_key\n"
             f"    api_key: ${{GRAPHRAG_API_KEY}}\n"
+            f"    request_timeout: {cfg.request_timeout}\n"
         )
         if cfg.llm_api_base:
             completion_block += f"    api_base: {cfg.llm_api_base}\n"
@@ -174,6 +179,7 @@ def _build_yaml(
             f"    api_base: {emb_base_url}\n"
             f"    auth_method: api_key\n"
             f"    api_key: ollama\n"
+            f"    request_timeout: {cfg.request_timeout}\n"
         )
     else:
         embedding_block = (
@@ -182,6 +188,7 @@ def _build_yaml(
             f"    model: {emb_model}\n"
             f"    auth_method: api_key\n"
             f"    api_key: ${{GRAPHRAG_EMBEDDING_KEY}}\n"
+            f"    request_timeout: {cfg.request_timeout}\n"
         )
         if emb_base:
             embedding_block += f"    api_base: {emb_base}\n"
