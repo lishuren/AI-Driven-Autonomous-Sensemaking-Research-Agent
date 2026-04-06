@@ -73,25 +73,3 @@ def test_load_resources_recursive_subdirectories(tmp_path: Path) -> None:
     titles = {d.title for d in docs}
     assert "top.md" in titles
     assert "deep.txt" in titles
-
-
-def test_load_resources_recognises_epub_extension(tmp_path: Path) -> None:
-    """EPUB files shouldn't be silently skipped — they hit the reader (or graceful skip)."""
-    # We can't easily create a valid EPUB without ebooklib, but we CAN verify
-    # the extension is dispatched (not treated as unsupported).
-    fake = tmp_path / "book.epub"
-    fake.write_bytes(b"PK\x03\x04not-a-real-epub")  # zip header to not crash instantly
-
-    docs = load_resources(str(tmp_path))
-    # Either loaded (if ebooklib installed) or gracefully skipped — never unsupported
-    # The key assertion: the function doesn't raise and the file isn't in
-    # the "skipping unsupported" path (no crash).
-    assert isinstance(docs, list)
-
-
-def test_load_resources_recognises_mobi_extension(tmp_path: Path) -> None:
-    fake = tmp_path / "book.mobi"
-    fake.write_bytes(b"\x00" * 64)  # not a valid MOBI, but tests dispatch
-
-    docs = load_resources(str(tmp_path))
-    assert isinstance(docs, list)

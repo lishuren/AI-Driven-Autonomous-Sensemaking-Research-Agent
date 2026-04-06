@@ -154,7 +154,7 @@ my-topic/
 ├── .env              ← API keys and budget (auto-loaded, gitignored)
 ├── requirements.md   ← topic spec (## Topic, ## Research Focus, ## Background, ## Constraints)
 ├── prompts/          ← optional prompt template overrides
-├── resources/        ← optional local PDFs, Word docs, Markdown, text
+├── resources/        ← optional plain-text notes, Markdown, CSV (complex formats: run graphragloader first)
 ├── graphrag/         ← optional pre-built GraphRAG index (auto-detected by Scout)
 └── output/           ← auto-created; run artifacts go here
 ```

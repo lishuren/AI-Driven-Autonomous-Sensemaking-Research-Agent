@@ -99,7 +99,7 @@ Implemented now:
 - `--topic-dir` CLI support: self-contained research folder convention with auto-discovered requirements.md, prompts/, resources/, output/; `.env` auto-loaded from topic dir
 - `_parse_requirements_file()`: section-based parsing (`## Topic`, `## Research Focus`, `## Background`, `## Constraints`), heading fallback, backward compatibility
 - `_parse_topic_dir()`: convention-based discovery of requirements.md/topic.md/first *.md, prompts/ and resources/ subdirs
-- resource loader (`tools/resource_loader.py`): flat directory scan of local PDF, DOCX, Markdown, and text files into `SourceDocument` entries; pymupdf + pytesseract OCR for scanned PDFs; python-docx for Word files; all optional deps with graceful degradation
+- resource loader (`tools/resource_loader.py`): recursive directory scan of plain-text files (`.md`, `.txt`, `.rst`, `.csv`, `.tsv`, `.log`) into `SourceDocument` entries; no external dependencies required; complex formats (PDF, DOCX, EPUB, source code) must be pre-indexed via `graphragloader`
 - `ResearchState.user_prompt`: background context field set from requirements.md, injected into all LLM node prompts via `$user_context` template variable
 - `ResearchState.constraints`: optional guardrail field set from `## Constraints`, injected into Critic analysis and used to shape Scout query expansion
 - watch-mode resource tracking: `watched_resources_dir` and `watched_resources_seen` fields let Scout ingest newly added files from `resources/` between iterations
@@ -242,3 +242,12 @@ When work continues on a later day:
 - created comprehensive test suites: 78 tests for graphragloader, 11 new tests for sensemaking-agent
 - updated architecture.md, agents.md, reuse-from-v1.md, implementation-progress.md
 - revalidated: sensemaking-agent `164 passed`, graphragloader `78 passed`
+
+### 2026-04-06 (cleanup)
+
+- stripped complex file format handling from `tools/resource_loader.py`: removed PDF/OCR, DOCX, EPUB, MOBI readers and their optional dependencies
+- `resource_loader` now handles plain-text extensions only (`.md`, `.txt`, `.rst`, `.csv`, `.tsv`, `.log`); no external dependencies required
+- removed `[resources]` optional dependency group from `sensemaking-agent/pyproject.toml` (pymupdf, python-docx, pytesseract, Pillow, EbookLib, beautifulsoup4, mobi)
+- removed EPUB and MOBI dispatch tests from `test_resource_loader.py`; all 7 remaining tests pass
+- updated `topicexample/resources/README.md`, `topicexample/README.md`, root `README.md`, `docs/implementation-progress.md`, and `docs/reuse-from-v1.md` to reflect plain-text-only boundary
+- complex format conversion remains in `graphragloader` as the correct pre-processing step before GraphRAG indexing
