@@ -105,6 +105,37 @@ This can appear when stderr output is treated as an exception while command is
 still progressing. Check whether indexing actually continues before treating as
 fatal.
 
+### 4.6 `FP16 is not supported on CPU; using FP32 instead` (Whisper)
+
+Whisper is transcribing audio/video files on **CPU** because a CUDA-capable
+PyTorch was not found. The run will complete but is significantly slower
+(~10-20x) than GPU-accelerated transcription.
+
+**Why it happens**: The default `torch` installed with Whisper is the CPU-only
+build.
+
+**How to fix** — install the CUDA PyTorch wheel into the venv (requires
+NVIDIA GPU + CUDA 12.x drivers):
+
+```powershell
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\pip.exe" install `
+    torch torchvision torchaudio `
+    --index-url https://download.pytorch.org/whl/cu124
+```
+
+After installation Whisper automatically detects the GPU and uses FP16.
+Verify detection before re-running:
+
+```powershell
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\python.exe" -c `
+    "import torch; print('CUDA:', torch.cuda.is_available(), '|', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'n/a')"
+```
+
+Expected output when working: `CUDA: True | NVIDIA GeForce ...`
+
+**If you do not have an NVIDIA GPU** the CPU warning is expected and harmless —
+transcription will be slow but correct.
+
 ## 5. Process and Runtime Behavior
 
 - Seeing 1-2 heavy Python processes during indexing is normal.
