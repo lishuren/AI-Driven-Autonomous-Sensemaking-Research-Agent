@@ -150,6 +150,8 @@ def _build_yaml(
             f"    model_provider: ollama_chat\n"
             f"    model: {cfg.llm_model}\n"
             f"    api_base: {api_base}\n"
+            f"    auth_method: api_key\n"
+            f"    api_key: ollama\n"
         )
     else:
         completion_block = (
@@ -167,9 +169,11 @@ def _build_yaml(
         emb_base_url = emb_base or _ollama_api_base(cfg)
         embedding_block = (
             f"  default_embedding_model:\n"
-            f"    model_provider: ollama_embedding\n"
+            f"    model_provider: ollama\n"
             f"    model: {emb_model}\n"
             f"    api_base: {emb_base_url}\n"
+            f"    auth_method: api_key\n"
+            f"    api_key: ollama\n"
         )
     else:
         embedding_block = (
