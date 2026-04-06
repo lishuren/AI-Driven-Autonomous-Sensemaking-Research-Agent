@@ -51,6 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_index.add_argument("--api-base", default=None, help="LLM API base URL.")
     p_index.add_argument("--api-key", default=None, help="LLM API key.")
     p_index.add_argument("--embedding-model", default=None, help="Embedding model name.")
+    p_index.add_argument("--request-timeout", type=int, default=1800, help="LLM request timeout in seconds (default 1800).")
 
     # --- query ---
     p_query = sub.add_parser("query", help="Query a completed GraphRAG index.")
@@ -73,6 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--api-key", default=None, help="LLM API key.")
     p_init.add_argument("--embedding-model", default=None, help="Embedding model name.")
     p_init.add_argument("--force", action="store_true", help="Overwrite existing settings.yaml.")
+    p_init.add_argument("--request-timeout", type=int, default=1800, help="LLM request timeout in seconds (default 1800).")
 
     return parser
 
@@ -129,6 +131,7 @@ async def _cmd_index(args: argparse.Namespace) -> int:
         llm_api_base=args.api_base,
         llm_api_key=args.api_key,
         embedding_model=args.embedding_model,
+        request_timeout=args.request_timeout,
     )
 
     result = await index(
@@ -181,6 +184,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
         llm_api_base=args.api_base,
         llm_api_key=args.api_key,
         embedding_model=args.embedding_model,
+        request_timeout=args.request_timeout,
     )
 
     path = generate_settings(args.target, config=config, force=args.force)
