@@ -25,7 +25,7 @@ class SettingsConfig:
 
     # LLM provider: "ollama" or "openai" (or any LiteLLM-compatible provider).
     llm_provider: str = "ollama"
-    llm_model: str = "qwen2.5:7b"
+    llm_model: str = "gemma4:e4b"
     llm_api_base: Optional[str] = None
     llm_api_key: Optional[str] = None
 
