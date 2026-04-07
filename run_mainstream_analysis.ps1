@@ -52,6 +52,31 @@ function Test-Prerequisite {
     New-Item -ItemType Directory -Force -Path $ReportsDir | Out-Null
 }
 
+function Wait-Ollama {
+    param(
+        [int]$TimeoutSeconds = 300,
+        [int]$PollIntervalSeconds = 10
+    )
+    $OllamaUrl = "http://localhost:11434/api/tags"
+    $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    Log "Checking Ollama is ready at $OllamaUrl (timeout=$TimeoutSeconds s)..."
+    while ((Get-Date) -lt $Deadline) {
+        try {
+            $Response = Invoke-WebRequest -Uri $OllamaUrl -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
+            if ($Response.StatusCode -eq 200) {
+                Log "Ollama is ready."
+                return
+            }
+        } catch {
+            # Not ready yet, keep waiting
+        }
+        $Remaining = [int]($Deadline - (Get-Date)).TotalSeconds
+        Log "Ollama not ready, retrying in $PollIntervalSeconds s... ($Remaining s remaining)"
+        Start-Sleep -Seconds $PollIntervalSeconds
+    }
+    throw "Ollama did not become ready within $TimeoutSeconds seconds. Ensure Ollama is running and gemma4:e4b is available."
+}
+
 function Initialize-Settings {
     $SettingsPath = Join-Path $Target "settings.yaml"
     if (Test-Path $SettingsPath) {
@@ -183,6 +208,7 @@ if ($SkipConvert) {
 if ($SkipIndex) {
     Log "Skipping index (-SkipIndex flag set)"
 } else {
+    Wait-Ollama
     Invoke-IndexStep
 }
 
