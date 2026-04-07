@@ -35,6 +35,7 @@ $QueryMethod    = "global"
 $RequestTimeout = 1800
 $ConvertMaxChars = 500000
 $GraphMethod    = "standard"
+$OllamaBaseUrl  = "http://localhost:11434"
 
 function Log {
     param([string]$Message, [string]$Level = "INFO")
@@ -77,10 +78,81 @@ function Wait-Ollama {
     throw "Ollama did not become ready within $TimeoutSeconds seconds. Ensure Ollama is running and gemma4:e4b is available."
 }
 
+function Wait-OllamaModel {
+    param(
+        [string]$ModelName,
+        [int]$TimeoutSeconds = 1200,
+        [int]$PollIntervalSeconds = 20
+    )
+    $GenerateUrl = "$OllamaBaseUrl/api/generate"
+    $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    Log "Checking model readiness: $ModelName (timeout=$TimeoutSeconds s)..."
+
+    while ((Get-Date) -lt $Deadline) {
+        try {
+            $Body = @{
+                model  = $ModelName
+                prompt = "ping"
+                stream = $false
+                options = @{ num_predict = 1 }
+            } | ConvertTo-Json -Depth 5
+
+            $Response = Invoke-RestMethod -Uri $GenerateUrl -Method Post -ContentType "application/json" -Body $Body -TimeoutSec 120 -ErrorAction Stop
+            if ($null -ne $Response -and $null -ne $Response.response) {
+                Log "Model ready: $ModelName"
+                return
+            }
+        } catch {
+            # Model may still be loading into memory; keep polling until timeout.
+        }
+
+        $Remaining = [int]($Deadline - (Get-Date)).TotalSeconds
+        Log "Model not ready yet ($ModelName), retrying in $PollIntervalSeconds s... ($Remaining s remaining)"
+        Start-Sleep -Seconds $PollIntervalSeconds
+    }
+
+    throw "Model did not become ready within $TimeoutSeconds seconds: $ModelName"
+}
+
+function Wait-OllamaEmbedding {
+    param(
+        [string]$ModelName,
+        [int]$TimeoutSeconds = 600,
+        [int]$PollIntervalSeconds = 15
+    )
+    $EmbeddingsUrl = "$OllamaBaseUrl/api/embeddings"
+    $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    Log "Checking embedding model readiness: $ModelName (timeout=$TimeoutSeconds s)..."
+
+    while ((Get-Date) -lt $Deadline) {
+        try {
+            $Body = @{
+                model  = $ModelName
+                prompt = "ping"
+            } | ConvertTo-Json -Depth 5
+
+            $Response = Invoke-RestMethod -Uri $EmbeddingsUrl -Method Post -ContentType "application/json" -Body $Body -TimeoutSec 90 -ErrorAction Stop
+            if ($null -ne $Response -and $null -ne $Response.embedding) {
+                Log "Embedding model ready: $ModelName"
+                return
+            }
+        } catch {
+            # Keep polling while embeddings model loads.
+        }
+
+        $Remaining = [int]($Deadline - (Get-Date)).TotalSeconds
+        Log "Embedding model not ready yet ($ModelName), retrying in $PollIntervalSeconds s... ($Remaining s remaining)"
+        Start-Sleep -Seconds $PollIntervalSeconds
+    }
+
+    throw "Embedding model did not become ready within $TimeoutSeconds seconds: $ModelName"
+}
+
 function Initialize-Settings {
     $SettingsPath = Join-Path $Target "settings.yaml"
     if (Test-Path $SettingsPath) {
         Log "settings.yaml already exists"
+        Ensure-SettingsTimeouts -SettingsPath $SettingsPath
         return
     }
     Log "Generating settings.yaml"
@@ -95,6 +167,43 @@ function Initialize-Settings {
     & $LoaderExe @InitArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to generate settings.yaml"
+    }
+    Ensure-SettingsTimeouts -SettingsPath $SettingsPath
+}
+
+function Ensure-SettingsTimeouts {
+    param([string]$SettingsPath)
+
+    if (-not (Test-Path $SettingsPath)) {
+        return
+    }
+
+    $Content = Get-Content -Path $SettingsPath -Raw
+    $Updated = $false
+
+    if ($Content -notmatch 'default_completion_model:[\s\S]*?request_timeout:') {
+        $Content = [regex]::Replace(
+            $Content,
+            '(default_completion_model:\r?\n(?:\s{4}.+\r?\n)*?\s{4}api_key:\s*ollama\r?\n)',
+            "$1    request_timeout: $RequestTimeout`r`n",
+            [System.Text.RegularExpressions.RegexOptions]::Multiline
+        )
+        $Updated = $true
+    }
+
+    if ($Content -notmatch 'default_embedding_model:[\s\S]*?request_timeout:') {
+        $Content = [regex]::Replace(
+            $Content,
+            '(default_embedding_model:\r?\n(?:\s{4}.+\r?\n)*?\s{4}api_key:\s*ollama\r?\n)',
+            "$1    request_timeout: $RequestTimeout`r`n",
+            [System.Text.RegularExpressions.RegexOptions]::Multiline
+        )
+        $Updated = $true
+    }
+
+    if ($Updated) {
+        Set-Content -Path $SettingsPath -Value $Content -Encoding UTF8 -NoNewline
+        Log "Updated settings.yaml with request_timeout=$RequestTimeout for Ollama models"
     }
 }
 
@@ -209,6 +318,8 @@ if ($SkipIndex) {
     Log "Skipping index (-SkipIndex flag set)"
 } else {
     Wait-Ollama
+    Wait-OllamaModel -ModelName $Model
+    Wait-OllamaEmbedding -ModelName $EmbeddingModel
     Invoke-IndexStep
 }
 
