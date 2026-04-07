@@ -114,7 +114,7 @@ shape.
 
 | V1 Component | V2 Replacement | Notes |
 |--|--|--|
-| `tools/resource_loader.py` (pymupdf, python-docx) | `graphragloader` package | Local file conversion now uses LlamaIndex via graphragloader; GraphRAG index replaces flat file loading as the primary local-corpus strategy |
+| `tools/resource_loader.py` (complex formats) | `graphragloader` package | Complex file conversion (PDF, DOCX, EPUB, source code) moved to graphragloader; resource_loader now handles plain-text files only and requires no extra dependencies |
 
 ## Hard Rule
 
