@@ -20,6 +20,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $env:DISABLE_AIOHTTP_TRANSPORT = "True"
+$env:LITELLM_LOCAL_MODEL_COST_MAP = "True"
 
 $LoaderExe   = "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\graphragloader.exe"
 $GraphRagExe = "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\graphrag.exe"
@@ -53,6 +54,128 @@ function Test-Prerequisite {
     New-Item -ItemType Directory -Force -Path $ReportsDir | Out-Null
 }
 
+function Get-OllamaExecutable {
+    foreach ($CommandName in @("ollama.exe", "ollama")) {
+        $Command = Get-Command $CommandName -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($Command -and $Command.Source -and (Test-Path $Command.Source)) {
+            return $Command.Source
+        }
+    }
+
+    $Candidates = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama.exe"),
+        (Join-Path $env:ProgramFiles "Ollama\ollama.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Ollama\ollama.exe")
+    ) | Where-Object { $_ -and (Test-Path $_) }
+
+    return $Candidates | Select-Object -First 1
+}
+
+function Get-OllamaTags {
+    param([int]$TimeoutSeconds = 5)
+
+    $OllamaUrl = "$OllamaBaseUrl/api/tags"
+    try {
+        return Invoke-RestMethod -Uri $OllamaUrl -Method Get -TimeoutSec $TimeoutSeconds -UseBasicParsing -ErrorAction Stop
+    } catch {
+        return $null
+    }
+}
+
+function Start-OllamaServer {
+    $ExistingProcess = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -match '^ollama(\.exe)?$' -and
+            $_.CommandLine -and
+            $_.CommandLine -match '\bserve\b'
+        } |
+        Select-Object -First 1
+
+    if ($ExistingProcess) {
+        Log "Detected existing ollama serve process (PID=$($ExistingProcess.ProcessId)); waiting for API readiness."
+        return
+    }
+
+    $OllamaExe = Get-OllamaExecutable
+    if (-not $OllamaExe) {
+        throw "Ollama API is not reachable and ollama.exe was not found. Install Ollama or start it manually."
+    }
+
+    Log "Ollama API is not reachable. Starting ollama serve from $OllamaExe"
+    $Process = Start-Process -FilePath $OllamaExe -ArgumentList "serve" -WindowStyle Hidden -PassThru -ErrorAction Stop
+    Log "Started ollama serve (PID=$($Process.Id))"
+}
+
+function Get-OllamaInstalledModels {
+    $TagsResponse = Get-OllamaTags -TimeoutSeconds 10
+    if (-not $TagsResponse) {
+        throw "Unable to query installed Ollama models from $OllamaBaseUrl/api/tags"
+    }
+
+    $InstalledModels = @()
+    foreach ($ModelInfo in @($TagsResponse.models)) {
+        if ($ModelInfo.name) {
+            $InstalledModels += [string]$ModelInfo.name
+        }
+        if ($ModelInfo.model) {
+            $InstalledModels += [string]$ModelInfo.model
+        }
+    }
+
+    return $InstalledModels | Where-Object { $_ } | Select-Object -Unique
+}
+
+function Test-OllamaModelInstalled {
+    param(
+        [string]$ModelName,
+        [string[]]$InstalledModels
+    )
+
+    $Requested = $ModelName.ToLowerInvariant()
+    $NormalizedInstalled = @($InstalledModels | ForEach-Object { $_.ToLowerInvariant() })
+    if ($NormalizedInstalled -contains $Requested) {
+        return $true
+    }
+
+    if ($ModelName -notmatch ':') {
+        return ($NormalizedInstalled | Where-Object { $_ -like "${Requested}:*" } | Select-Object -First 1) -ne $null
+    }
+
+    return $false
+}
+
+function Confirm-OllamaModelsInstalled {
+    param([string[]]$ModelNames)
+
+    $InstalledModels = @(Get-OllamaInstalledModels)
+    $MissingModels = @()
+
+    foreach ($ModelName in $ModelNames) {
+        if (-not (Test-OllamaModelInstalled -ModelName $ModelName -InstalledModels $InstalledModels)) {
+            $MissingModels += $ModelName
+        }
+    }
+
+    if ($MissingModels.Count -gt 0) {
+        $PullCommands = ($MissingModels | ForEach-Object { "ollama pull $_" }) -join "; "
+        throw "Required Ollama model(s) not installed: $($MissingModels -join ', '). Install them first: $PullCommands"
+    }
+
+    Log "Verified Ollama models are installed: $($ModelNames -join ', ')"
+}
+
+function Test-OllamaMissingModelError {
+    param($ErrorRecord)
+
+    foreach ($Message in @($ErrorRecord.ErrorDetails.Message, $ErrorRecord.Exception.Message)) {
+        if ($Message -and $Message -match 'model' -and $Message -match 'not found') {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Wait-Ollama {
     param(
         [int]$TimeoutSeconds = 300,
@@ -60,22 +183,25 @@ function Wait-Ollama {
     )
     $OllamaUrl = "http://localhost:11434/api/tags"
     $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $AttemptedAutoStart = $false
     Log "Checking Ollama is ready at $OllamaUrl (timeout=$TimeoutSeconds s)..."
     while ((Get-Date) -lt $Deadline) {
-        try {
-            $Response = Invoke-WebRequest -Uri $OllamaUrl -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
-            if ($Response.StatusCode -eq 200) {
-                Log "Ollama is ready."
-                return
-            }
-        } catch {
-            # Not ready yet, keep waiting
+        $Response = Get-OllamaTags -TimeoutSeconds 5
+        if ($null -ne $Response) {
+            Log "Ollama is ready."
+            return
         }
+
+        if (-not $AttemptedAutoStart) {
+            Start-OllamaServer
+            $AttemptedAutoStart = $true
+        }
+
         $Remaining = [int]($Deadline - (Get-Date)).TotalSeconds
         Log "Ollama not ready, retrying in $PollIntervalSeconds s... ($Remaining s remaining)"
         Start-Sleep -Seconds $PollIntervalSeconds
     }
-    throw "Ollama did not become ready within $TimeoutSeconds seconds. Ensure Ollama is running and gemma4:e4b is available."
+    throw "Ollama did not become ready within $TimeoutSeconds seconds. Ensure Ollama is installed and startable on this machine."
 }
 
 function Wait-OllamaModel {
@@ -103,7 +229,9 @@ function Wait-OllamaModel {
                 return
             }
         } catch {
-            # Model may still be loading into memory; keep polling until timeout.
+            if (Test-OllamaMissingModelError $_) {
+                throw "Completion model is missing from Ollama: $ModelName. Install it with: ollama pull $ModelName"
+            }
         }
 
         $Remaining = [int]($Deadline - (Get-Date)).TotalSeconds
@@ -137,7 +265,9 @@ function Wait-OllamaEmbedding {
                 return
             }
         } catch {
-            # Keep polling while embeddings model loads.
+            if (Test-OllamaMissingModelError $_) {
+                throw "Embedding model is missing from Ollama: $ModelName. Install it with: ollama pull $ModelName"
+            }
         }
 
         $Remaining = [int]($Deadline - (Get-Date)).TotalSeconds
@@ -152,7 +282,7 @@ function Initialize-Settings {
     $SettingsPath = Join-Path $Target "settings.yaml"
     if (Test-Path $SettingsPath) {
         Log "settings.yaml already exists"
-        Ensure-SettingsTimeouts -SettingsPath $SettingsPath
+        Update-SettingsTimeouts -SettingsPath $SettingsPath
         return
     }
     Log "Generating settings.yaml"
@@ -168,10 +298,10 @@ function Initialize-Settings {
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to generate settings.yaml"
     }
-    Ensure-SettingsTimeouts -SettingsPath $SettingsPath
+    Update-SettingsTimeouts -SettingsPath $SettingsPath
 }
 
-function Ensure-SettingsTimeouts {
+function Update-SettingsTimeouts {
     param([string]$SettingsPath)
 
     if (-not (Test-Path $SettingsPath)) {
@@ -181,21 +311,26 @@ function Ensure-SettingsTimeouts {
     $Content = Get-Content -Path $SettingsPath -Raw
     $Updated = $false
 
-    if ($Content -notmatch 'default_completion_model:[\s\S]*?request_timeout:') {
+    if ($Content -match 'request_timeout:') {
+        $Content = $Content -replace 'request_timeout:', 'timeout:'
+        $Updated = $true
+    }
+
+    if ($Content -notmatch 'default_completion_model:[\s\S]*?timeout:') {
         $Content = [regex]::Replace(
             $Content,
             '(default_completion_model:\r?\n(?:\s{4}.+\r?\n)*?\s{4}api_key:\s*ollama\r?\n)',
-            "$1    request_timeout: $RequestTimeout`r`n",
+            "$1    timeout: $RequestTimeout`r`n",
             [System.Text.RegularExpressions.RegexOptions]::Multiline
         )
         $Updated = $true
     }
 
-    if ($Content -notmatch 'default_embedding_model:[\s\S]*?request_timeout:') {
+    if ($Content -notmatch 'default_embedding_model:[\s\S]*?timeout:') {
         $Content = [regex]::Replace(
             $Content,
             '(default_embedding_model:\r?\n(?:\s{4}.+\r?\n)*?\s{4}api_key:\s*ollama\r?\n)',
-            "$1    request_timeout: $RequestTimeout`r`n",
+            "$1    timeout: $RequestTimeout`r`n",
             [System.Text.RegularExpressions.RegexOptions]::Multiline
         )
         $Updated = $true
@@ -203,7 +338,7 @@ function Ensure-SettingsTimeouts {
 
     if ($Updated) {
         Set-Content -Path $SettingsPath -Value $Content -Encoding UTF8 -NoNewline
-        Log "Updated settings.yaml with request_timeout=$RequestTimeout for Ollama models"
+        Log "Updated settings.yaml with timeout=$RequestTimeout for Ollama models"
     }
 }
 
@@ -299,6 +434,7 @@ function Show-ResumptionGuide {
 
 Log "=== run_mainstream_analysis.ps1 started ==="
 Log "DISABLE_AIOHTTP_TRANSPORT=$($env:DISABLE_AIOHTTP_TRANSPORT)"
+Log "LITELLM_LOCAL_MODEL_COST_MAP=$($env:LITELLM_LOCAL_MODEL_COST_MAP)"
 
 if ($CheckShardStatus) {
     Show-ResumptionGuide
@@ -318,6 +454,7 @@ if ($SkipIndex) {
     Log "Skipping index (-SkipIndex flag set)"
 } else {
     Wait-Ollama
+    Confirm-OllamaModelsInstalled -ModelNames @($Model, $EmbeddingModel)
     Wait-OllamaModel -ModelName $Model
     Wait-OllamaEmbedding -ModelName $EmbeddingModel
     Invoke-IndexStep

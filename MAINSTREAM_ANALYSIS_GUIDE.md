@@ -125,7 +125,10 @@ Runs: convert → index → reports (full 8–10+ days)
   ```
 
 ### Environment Stability for 10-Day Runs
-- Ensure Ollama stays running (no restarts)
+- The wrapper now attempts to auto-start `ollama serve` if the API is down at launch
+- Required Ollama models must still be pulled in advance: `gemma4:e4b` and `nomic-embed-text`
+- The wrapper forces `LITELLM_LOCAL_MODEL_COST_MAP=True` so LiteLLM uses its bundled model metadata instead of timing out on a GitHub fetch during startup
+- Once indexing starts, keep Ollama running for the duration of the run (no restarts)
 - Verify network stability (Tavily API, local network)
 - Disable auto-sleep / hibernation on the machine
 - Monitor disk space (index grows to ~5–10 GB)
@@ -135,31 +138,31 @@ Runs: convert → index → reports (full 8–10+ days)
 Settings are stored in `D:\mainstreamGraphRAG\settings.yaml`:
 
 ```yaml
-llm:
-  api_key: ""
-  type: ollama
-  model: gemma4:e4b
-  request_timeout: 1800
+completion_models:
+  default_completion_model:
+    model_provider: ollama_chat
+    model: gemma4:e4b
+    api_base: http://localhost:11434
+    timeout: 1800
 
-embedding:
-  type: ollama
-  model: nomic-embed-text
+embedding_models:
+  default_embedding_model:
+    model_provider: ollama
+    model: nomic-embed-text
+    api_base: http://localhost:11434
+    timeout: 1800
 
 chunking:
   size: 1200
   overlap: 100
 
-graphrag:
-  method: standard  # Do not change
-  max_depth: 2
-
 vector_store: lancedb
 ```
 
 Key tuning:
-- `request_timeout: 1800` — 30 min per LLM call (adequate for 10-day window)
+- `timeout: 1800` — 30 min per LLM call (adequate for long Ollama graph extraction calls)
 - `chunking.size: 1200` — 1200 tokens per chunk (balanced for gemma4)
-- `method: standard` — GraphRAG indexing mode (do not change)
+- `GraphMethod = standard` in the wrapper — GraphRAG indexing mode (do not change)
 
 ## Troubleshooting
 
@@ -189,8 +192,31 @@ Key tuning:
 
 **Solution:** Increase timeout in settings.yaml:
 ```yaml
-llm:
-  request_timeout: 3600  # 60 min (was 30 min)
+completion_models:
+  default_completion_model:
+    timeout: 3600  # 60 min (was 30 min)
+
+embedding_models:
+  default_embedding_model:
+    timeout: 3600
+```
+
+### Ollama Server Not Running or Models Missing
+**Symptom:** The wrapper exits before indexing begins with an Ollama startup or missing-model error.
+
+**Behavior:** `run_mainstream_analysis.ps1` now attempts to start `ollama serve` automatically if the API is down at launch. It also fails fast if `gemma4:e4b` or `nomic-embed-text` is not installed.
+
+### LiteLLM Remote Cost-Map Warning
+**Symptom:** Startup logs show a warning like `LiteLLM: Failed to fetch remote model cost map ... Falling back to local backup.`
+
+**Behavior:** This warning is non-fatal. LiteLLM only uses that remote file for model pricing/context metadata and automatically falls back to the packaged backup JSON. The wrapper now sets `LITELLM_LOCAL_MODEL_COST_MAP=True` so the offline/local Ollama workflow skips the remote fetch entirely.
+
+**Solution:** Pull the required models once, then rerun:
+```powershell
+ollama pull gemma4:e4b
+ollama pull nomic-embed-text
+
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1" -SkipConvert
 ```
 
 ## Files & Paths
@@ -229,6 +255,6 @@ llm:
 
 ---
 
-**Last Updated:** 2026-04-08  
-**Script Version:** 2.0 (shard checkpoint + resume)  
+**Last Updated:** 2026-04-10  
+**Script Version:** 2.1 (shard checkpoint + Ollama auto-start preflight)  
 **Supported Commands:** Full | `-SkipConvert` | `-SkipIndex` | `-CheckShardStatus` | combinations

@@ -149,6 +149,26 @@ tasklist | findstr /I graphragloader
 tasklist | findstr /I graphrag
 ```
 
+For a target-aware PowerShell check, run:
+
+```powershell
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\graphragloader\check_status.ps1" D:\mainstreamGraphRAG
+```
+
+If you are using Git Bash, WSL, or another Unix shell, you can also inspect a
+specific GraphRAG target with:
+
+```bash
+./check_status.sh /path/to/graphrag-project
+```
+
+The script reports whether a matching indexing process is active and summarizes
+the current `input/`, `output/`, `settings.yaml`, and `.graphragloader_state.json`
+state for the target directory.
+
+`check_status.ps1` prints the same status summary for Windows PowerShell and
+PowerShell 7 terminals.
+
 ## 6. Quick Health Checks
 
 Verify converted input exists:

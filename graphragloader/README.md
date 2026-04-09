@@ -20,6 +20,18 @@ graphragloader query --target ./graphrag --question "What are the key findings?"
 For Windows-focused operational guidance (dependency issues, long-run indexing,
 warnings, and troubleshooting), see [RUNBOOK.md](RUNBOOK.md).
 
+For a quick shell-based runtime check against a GraphRAG target directory, run:
+
+```bash
+./check_status.sh /path/to/graphrag-project
+```
+
+For a native PowerShell runtime check on Windows, run:
+
+```powershell
+.\check_status.ps1 D:\mainstreamGraphRAG
+```
+
 ## Supported File Types
 
 | Category | Extensions |
@@ -40,6 +52,11 @@ warnings, and troubleshooting), see [RUNBOOK.md](RUNBOOK.md).
 - `graphragloader convert` — convert files to text (no indexing)
 - `graphragloader index` — convert + build GraphRAG index
 - `graphragloader query` — query an existing GraphRAG index
+
+## Helper Scripts
+
+- `check_status.sh` — inspect a GraphRAG target directory and show whether a matching indexing process is currently running
+- `check_status.ps1` — PowerShell version of the status helper for Windows terminals
 
 ## Optional Dependencies
 
