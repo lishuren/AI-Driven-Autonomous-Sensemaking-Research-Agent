@@ -7,12 +7,11 @@
       - GraphRAG indexing method: fast    (was standard) — lighter extraction algorithms
       - Chunk size             : 2,000    (was 1,200)   — ~40 % fewer text units → fewer LLM calls
       - Chunk overlap          : 150      (was 100)
+      - Dual-model strategy    : small model for indexing, larger model for reports
 
-    Model swap (optional — do this only after confirming fast-mode quality):
-      Pass -CompletionModel with a smaller local model, e.g.:
-        -CompletionModel "gemma3:4b"
-        -CompletionModel "qwen2.5:7b"
-      Pull the model first: ollama pull <model>
+    Default model split:
+      -IndexModel  gemma4:e2b  — fits entirely in 8 GB VRAM, fast entity extraction
+      -ReportModel gemma4:e4b  — higher quality for final report synthesis
 
 .USAGE
     # First run (convert + index + reports):
@@ -27,17 +26,19 @@
     # Status check (no workflow steps executed):
     & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -CheckShardStatus
 
-    # Test a smaller model (after validating fast-mode quality):
-    & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -CompletionModel "gemma3:4b"
+    # Override either model independently:
+    & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -IndexModel "gemma4:e2b" -ReportModel "gemma4:e4b"
 #>
 param(
     [switch]$SkipConvert,
     [switch]$SkipIndex,
     [switch]$CheckShardStatus,
-    # Override the completion model without editing this file.
-    # Default keeps gemma4:e4b so the existing LLM cache can be reused.
-    # Swap to a smaller model only after confirming quality is acceptable.
-    [string]$CompletionModel = "gemma4:e4b"
+    # Small, fast model used during GraphRAG indexing (entity extraction).
+    # gemma4:e2b fits fully in 8 GB VRAM with ~3 GB headroom — no CPU offload.
+    [string]$IndexModel  = "gemma4:e2b",
+    # Higher-quality model used only for the 5 final report queries.
+    # Runs after indexing is complete; each query is a single LLM call.
+    [string]$ReportModel = "gemma4:e4b"
 )
 
 Set-StrictMode -Version Latest
@@ -56,7 +57,6 @@ $LogFile    = Join-Path $Target "run_mainstream_fast.log"   # separate log — d
 
 # ── FAST-MODE SETTINGS ───────────────────────────────────────────────────────
 $Provider       = "ollama"
-$Model          = $CompletionModel
 $EmbeddingModel = "nomic-embed-text"
 $QueryMethod    = "global"
 $RequestTimeout = 1800
@@ -238,6 +238,27 @@ function Wait-OllamaEmbedding {
 
 # Patches settings.yaml with fast-mode chunk sizes.
 # Called after every Initialize-Settings so the values survive regeneration.
+# Swaps the completion model name inside settings.yaml.
+# Called between the index and report phases to hot-swap models.
+function Update-SettingsModel {
+    param([string]$SettingsPath, [string]$ModelName)
+    if (-not (Test-Path $SettingsPath)) { return }
+
+    $Content = Get-Content -Path $SettingsPath -Raw
+    # Replace the model: line that immediately follows default_completion_model block.
+    $New = [regex]::Replace(
+        $Content,
+        '(?m)(default_completion_model:.*?\n(?:\s+.+\n)*?\s+model:)\s*\S+',
+        "`${1} $ModelName"
+    )
+    if ($New -ne $Content) {
+        Set-Content -Path $SettingsPath -Value $New -Encoding UTF8 -NoNewline
+        Log "settings.yaml: completion model set to $ModelName"
+    } else {
+        Log "settings.yaml: model line not matched — verify settings.yaml format" "WARN"
+    }
+}
+
 function Update-SettingsChunking {
     param([string]$SettingsPath)
     if (-not (Test-Path $SettingsPath)) { return }
@@ -299,12 +320,12 @@ function Initialize-Settings {
     if (Test-Path $SettingsPath) {
         Log "settings.yaml already exists"
     } else {
-        Log "Generating settings.yaml"
+        Log "Generating settings.yaml (init model: $IndexModel)"
         $InitArgs = @(
             "init",
             "--target",          $Target,
             "--provider",        $Provider,
-            "--model",           $Model,
+            "--model",           $IndexModel,
             "--embedding-model", $EmbeddingModel,
             "--request-timeout", $RequestTimeout
         )
@@ -313,6 +334,8 @@ function Initialize-Settings {
     }
     Update-SettingsTimeouts  -SettingsPath $SettingsPath
     Update-SettingsChunking  -SettingsPath $SettingsPath
+    # Ensure settings.yaml reflects the requested index model (survives re-runs).
+    Update-SettingsModel     -SettingsPath $SettingsPath -ModelName $IndexModel
 }
 
 function Invoke-ConvertStep {
@@ -330,7 +353,7 @@ function Invoke-ConvertStep {
 }
 
 function Invoke-IndexStep {
-    Log "Step 2/3 GraphRAG index started  method=$GraphMethod (fast mode)  model=$Model"
+    Log "Step 2/3 GraphRAG index started  method=$GraphMethod (fast mode)  index-model=$IndexModel"
     $ShardStatusFile = Join-Path $Target ".shard_status.json"
     $ShardStatus     = @{}
     if (Test-Path $ShardStatusFile) {
@@ -341,10 +364,11 @@ function Invoke-IndexStep {
     Log "Running GraphRAG index (fast)..."
     & $GraphRagExe @IndexArgs
     if ($LASTEXITCODE -ne 0) { throw "GraphRAG index failed with exit code $LASTEXITCODE" }
-    $ShardStatus["#completed"] = $true
-    $ShardStatus["#timestamp"] = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-    $ShardStatus["#method"]    = $GraphMethod
-    $ShardStatus["#model"]     = $Model
+    $ShardStatus["#completed"]   = $true
+    $ShardStatus["#timestamp"]   = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+    $ShardStatus["#method"]      = $GraphMethod
+    $ShardStatus["#index-model"] = $IndexModel
+    $ShardStatus["#report-model"]= $ReportModel
     $ShardStatus | ConvertTo-Json | Set-Content $ShardStatusFile -Encoding UTF8
     Log "GraphRAG index complete."
 }
@@ -390,15 +414,16 @@ function Show-ResumptionGuide {
         Write-Host "To resume (fast mode):" -ForegroundColor White
         Write-Host '& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -SkipConvert' -ForegroundColor Green
         Write-Host ""
-        Write-Host "To test a smaller model:" -ForegroundColor White
-        Write-Host '& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -SkipConvert -CompletionModel "gemma3:4b"' -ForegroundColor Cyan
+        Write-Host "To regenerate reports only:" -ForegroundColor White
+        Write-Host '& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -SkipConvert -SkipIndex' -ForegroundColor Cyan
         Write-Host ""
     }
 }
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 Log "=== run_mainstream_fast.ps1 started ==="
-Log "FAST MODE: max_chars=$ConvertMaxChars  method=$GraphMethod  chunk_size=$FastChunkSize  model=$Model"
+Log "FAST MODE: max_chars=$ConvertMaxChars  method=$GraphMethod  chunk_size=$FastChunkSize"
+Log "MODELS: index=$IndexModel  report=$ReportModel  embedding=$EmbeddingModel"
 Log "DISABLE_AIOHTTP_TRANSPORT=$($env:DISABLE_AIOHTTP_TRANSPORT)"
 Log "LITELLM_LOCAL_MODEL_COST_MAP=$($env:LITELLM_LOCAL_MODEL_COST_MAP)"
 
@@ -420,11 +445,18 @@ if ($SkipIndex) {
     Log "Skipping index (-SkipIndex flag set)"
 } else {
     Wait-Ollama
-    Confirm-OllamaModelsInstalled -ModelNames @($Model, $EmbeddingModel)
-    Wait-OllamaModel    -ModelName $Model
+    Confirm-OllamaModelsInstalled -ModelNames @($IndexModel, $EmbeddingModel)
+    Wait-OllamaModel     -ModelName $IndexModel
     Wait-OllamaEmbedding -ModelName $EmbeddingModel
     Invoke-IndexStep
 }
+
+# ── Swap to report model before generating reports ────────────────────────────
+$SettingsPath = Join-Path $Target "settings.yaml"
+Log "Switching completion model to $ReportModel for report generation"
+Update-SettingsModel -SettingsPath $SettingsPath -ModelName $ReportModel
+Confirm-OllamaModelsInstalled -ModelNames @($ReportModel)
+Wait-OllamaModel -ModelName $ReportModel
 
 $Reports = @(
     @{ Name = "analysis_report";        Question = "Provide a comprehensive analysis of this corpus: major themes, key findings, key entities and their relationships, uncertainties, and actionable conclusions. Include supporting evidence for each finding." },

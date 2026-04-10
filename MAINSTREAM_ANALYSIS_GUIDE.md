@@ -91,6 +91,88 @@ Runs: convert → index → reports (full 8–10+ days)
 | Reports | 30–60 min | 5 LLM queries, sequential |
 | **Total** | **~10 days** | Assuming uninterrupted |
 
+## Fast Processing Mode (48–72 h Target)
+
+For large corpora (100k+ files / 10+ GB), `run_mainstream_fast.ps1` applies three knobs
+that together cut the number of LLM calls to roughly one-third of the standard run.
+
+### What changes vs. the standard script
+
+| Setting | Standard | Fast | Effect |
+|---|---|---|---|
+| Max chars / file | 500,000 | **100,000** | ~5× fewer chars ingested |
+| GraphRAG method | standard | **fast** | lighter extraction algorithm |
+| Chunk size (tokens) | 1,200 | **2,000** | ~40% fewer text units |
+| Chunk overlap | 100 | **150** | — |
+| Indexing model | gemma4:e4b | **gemma4:e2b** | fits fully in 8 GB VRAM |
+| Report model | gemma4:e4b | **gemma4:e4b** | unchanged — quality preserved |
+| Log file | `run_mainstream_analysis.log` | **`run_mainstream_fast.log`** | separate, no clobber |
+
+### Dual-Model Strategy
+
+The fast script uses **two different models** in sequence:
+
+1. **`gemma4:e2b` — indexing** (entity extraction, ~10k–18k LLM calls)
+   - 2.3 B effective / 5.1 B total parameters
+   - ~4.5 GB on disk — fits entirely in 8 GB VRAM with ~3 GB headroom
+   - No CPU offload means every call runs at full GPU speed
+   - Structured extraction quality is sufficient for code/doc corpora
+
+2. **`gemma4:e4b` — report generation** (5 queries total)
+   - Higher-quality synthesis for the final reports
+   - Runs after indexing is complete; only 5 LLM calls so latency is tolerable
+
+The script patches `settings.yaml` automatically between the two phases —
+no manual YAML edits needed.
+
+### Prerequisites
+
+Pull the indexing model before the first run (e4b is already installed):
+
+```powershell
+ollama pull gemma4:e2b
+```
+
+### Usage
+
+**First run (full: convert + index + reports):**
+```powershell
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1"
+```
+
+**Resume after interruption:**
+```powershell
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -SkipConvert
+```
+
+**Reports only (after index completes):**
+```powershell
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -SkipConvert -SkipIndex
+```
+
+**Override either model independently:**
+```powershell
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" `
+    -IndexModel "gemma4:e2b" `
+    -ReportModel "gemma4:e4b"
+```
+
+### Fast-Mode Timeline Estimate
+
+| Phase | Duration | Notes |
+|---|---|---|
+| Convert | 5–10 min | 100k char cap reduces output size |
+| Extract_graph | 30–48 h | e2b + fast method + fewer chunks |
+| Build / Compute | 2–4 h | unchanged |
+| Reports | 30–60 min | e4b model, 5 queries |
+| **Total** | **~48–72 h** | With uninterrupted Ollama |
+
+> **Quality tradeoff:** Fast mode extracts fewer entities per text unit and may miss
+> low-frequency relationships. For a first-pass analysis of a large repo, this is
+> usually acceptable. Use the standard script for production-quality deep analysis.
+
+---
+
 ## Adding New Source Code to Analysis
 
 If you have been granted access to a new repository and want to include it in the GraphRAG index,
@@ -302,6 +384,8 @@ ollama pull nomic-embed-text
 | `D:\mainstreamGraphRAG\.shard_status.json` | Checkpoint file (created by script) |
 | `D:\mainstreamGraphRAG\run_mainstream_analysis.log` | Workflow log (appended on each run) |
 | `D:\mainstreamGraphRAG\settings.yaml` | GraphRAG configuration |
+| `D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1` | Fast-processing script (48–72 h) |
+| `D:\mainstreamGraphRAG\run_mainstream_fast.log` | Fast-mode workflow log |
 
 ## Next Steps
 
@@ -325,6 +409,9 @@ ollama pull nomic-embed-text
 ---
 
 **Last Updated:** 2026-04-10  
-**Script Version:** 2.1 (shard checkpoint + Ollama auto-start preflight)  
-**Supported Commands:** Full | `-SkipConvert` | `-SkipIndex` | `-CheckShardStatus` | combinations  
-**Changelog:** Added "Adding New Source Code to Analysis" section
+**Script Version:** 2.2 (dual-model fast processing)  
+**Supported Scripts:** `run_mainstream_analysis.ps1` (standard, ~10 days) | `run_mainstream_fast.ps1` (fast, ~48–72 h)  
+**Changelog:**
+- Added `run_mainstream_fast.ps1` with dual-model strategy (e2b for indexing, e4b for reports)
+- Added "Fast Processing Mode" section and fast-mode timeline
+- Added "Adding New Source Code to Analysis" section
