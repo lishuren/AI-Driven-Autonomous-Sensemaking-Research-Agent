@@ -128,6 +128,17 @@ def _stable_filename(source_path: Path) -> str:
     return f"{stem}_{digest}.txt"
 
 
+def _is_up_to_date(source: Path, output_dir: Path) -> bool:
+    """Return True when the output .txt already exists and is newer than source."""
+    out_path = output_dir / _stable_filename(source)
+    if not out_path.exists():
+        return False
+    try:
+        return source.stat().st_mtime <= out_path.stat().st_mtime
+    except OSError:
+        return False
+
+
 def _read_mobi(path: Path) -> Optional[str]:
     """Extract text from a MOBI ebook."""
     if not _HAS_MOBI:
@@ -298,8 +309,11 @@ def _build_metadata_header(path: Path) -> str:
     )
 
 
-def _use_llamaindex(source_dir: Path, extensions: set[str]) -> dict[str, str]:
+def _use_llamaindex(source_dir: Path, extensions: set[str], *, files: Optional[list[Path]] = None) -> dict[str, str]:
     """Use LlamaIndex to read files matching *extensions* from *source_dir*.
+
+    When *files* is provided, only those specific files are loaded (incremental
+    mode).  Otherwise the full *source_dir* is scanned recursively.
 
     Returns a mapping of ``{resolved_path_str: extracted_text}``.
     """
@@ -318,12 +332,19 @@ def _use_llamaindex(source_dir: Path, extensions: set[str]) -> dict[str, str]:
         return {}
 
     try:
-        reader = SimpleDirectoryReader(
-            input_dir=str(source_dir),
-            recursive=True,
-            required_exts=target_exts,
-            errors="ignore",
-        )
+        if files:
+            # Load only the specific files that need (re-)processing.
+            reader = SimpleDirectoryReader(
+                input_files=[str(f) for f in files],
+                errors="ignore",
+            )
+        else:
+            reader = SimpleDirectoryReader(
+                input_dir=str(source_dir),
+                recursive=True,
+                required_exts=target_exts,
+                errors="ignore",
+            )
         documents = reader.load_data()
     except Exception as exc:
         logger.warning("converter: LlamaIndex load failed — %s", exc)
@@ -509,21 +530,42 @@ def _convert_files(
             # Unknown extension — try reading as plain text.
             fallback_files.append(f)
 
-    # Phase 1: LlamaIndex for rich formats (PDF, DOCX, EPUB, etc.)
-    if llamaindex_exts:
-        logger.info(
-            "converter: phase 1/7 — LlamaIndex  (%d files: %s)  [this may take several minutes]",
-            len(llamaindex_candidates),
-            ", ".join(sorted(llamaindex_exts)),
-        )
-    llamaindex_results = _use_llamaindex(source_dir, llamaindex_exts) if llamaindex_exts else {}
-    if llamaindex_exts:
-        logger.info("converter: phase 1/7 — LlamaIndex done (%d results)", len(llamaindex_results))
-
     results: list[ConvertedDocument] = []
 
+    # Phase 1: LlamaIndex for rich formats (PDF, DOCX, EPUB, etc.)
+    # Pre-filter: skip files whose output is already up to date (avoids loading
+    # potentially thousands of PDFs/DOCXs through LlamaIndex unnecessarily).
+    if not force:
+        lli_skip = [f for f in llamaindex_candidates if _is_up_to_date(f, output_dir)]
+        lli_need = [f for f in llamaindex_candidates if not _is_up_to_date(f, output_dir)]
+        if lli_skip:
+            logger.info(
+                "converter: phase 1/7 — LlamaIndex  skipping %d / %d already up-to-date files",
+                len(lli_skip), len(llamaindex_candidates),
+            )
+            for f in lli_skip:
+                _tick(f)
+                results.append(ConvertedDocument(
+                    source_path=str(f.resolve()),
+                    target_path=str((output_dir / _stable_filename(f)).resolve()),
+                    title=f.name, char_count=0,
+                    format=f.suffix.lstrip(".") or "txt",
+                    metadata={"size_bytes": f.stat().st_size, "skipped": True},
+                ))
+    else:
+        lli_need = llamaindex_candidates
+
+    if lli_need:
+        logger.info(
+            "converter: phase 1/7 — LlamaIndex  (%d files: %s)  [this may take several minutes]",
+            len(lli_need), ", ".join(sorted(llamaindex_exts)),
+        )
+    llamaindex_results = _use_llamaindex(source_dir, llamaindex_exts, files=lli_need) if lli_need else {}
+    if lli_need:
+        logger.info("converter: phase 1/7 — LlamaIndex done (%d results)", len(llamaindex_results))
+
     # Write LlamaIndex results.
-    for f in llamaindex_candidates:
+    for f in lli_need:
         _tick(f)
         key = str(f.resolve())
         text = llamaindex_results.get(key, "")
