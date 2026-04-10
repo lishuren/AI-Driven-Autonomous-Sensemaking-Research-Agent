@@ -91,6 +91,75 @@ Runs: convert → index → reports (full 8–10+ days)
 | Reports | 30–60 min | 5 LLM queries, sequential |
 | **Total** | **~10 days** | Assuming uninterrupted |
 
+## Adding New Source Code to Analysis
+
+If you have been granted access to a new repository and want to include it in the GraphRAG index,
+follow these steps. Because convert must re-run to pick up the new files, **do not use `-SkipConvert`** for this workflow.
+
+### Step 1 — Copy or Clone the Repo into the Source Folder
+
+`D:\Mainstream` is the root source folder. Add sub-folders inside it however suits your workflow.
+
+**Option A — Clone directly:**
+```powershell
+git clone https://github.com/your-org/your-repo.git "D:\Mainstream\your-repo"
+```
+
+**Option B — Copy a local checkout:**
+```powershell
+Copy-Item -Path "C:\path\to\your\repo" -Destination "D:\Mainstream\your-repo" -Recurse
+```
+
+The loader walks all sub-folders recursively, so any nesting level is fine.
+
+### Step 2 — (Optional) Preview What Will Be Converted
+
+Run convert in isolation to verify your code files appear before committing to the full index:
+
+```powershell
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\graphragloader.exe" convert `
+    --source "D:\Mainstream" `
+    --target "D:\mainstreamGraphRAG" `
+    --include-code `
+    --max-chars 500000
+```
+
+Inspect `D:\mainstreamGraphRAG\input` — each document is written as a plain-text file. Confirm your
+source files were picked up before starting the long index run.
+
+### Step 3 — Run the Full Workflow
+
+```powershell
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1"
+```
+
+This runs: convert (re-processes all of `D:\Mainstream`) → index → reports.
+
+> **Cache note:** The existing LLM cache in `D:\mainstreamGraphRAG\cache` still covers
+> previously indexed text units, so those units incur no extra model calls. Only the
+> newly added code files are processed from scratch.
+
+### Supported Source Code File Types
+
+The loader recognises these extensions automatically (no extra flags needed):
+
+| Language | Extensions |
+|----------|-----------|
+| Python | `.py` |
+| JavaScript / TypeScript | `.js`, `.ts`, `.tsx` |
+| Java | `.java` |
+| C# | `.cs` |
+| Go | `.go` |
+| Rust | `.rs` |
+| C / C++ | `.c`, `.cpp`, `.h` |
+| SQL | `.sql` |
+| Shell / PowerShell | `.sh`, `.ps1` |
+| Config / Markup | `.yaml`, `.toml`, `.json`, `.xml`, `.html`, `.md` |
+
+Unknown extensions are tried as plain text; binary-looking content is skipped automatically.
+
+---
+
 ## Best Practices
 
 ### Preventing Accidental Loss
@@ -257,4 +326,5 @@ ollama pull nomic-embed-text
 
 **Last Updated:** 2026-04-10  
 **Script Version:** 2.1 (shard checkpoint + Ollama auto-start preflight)  
-**Supported Commands:** Full | `-SkipConvert` | `-SkipIndex` | `-CheckShardStatus` | combinations
+**Supported Commands:** Full | `-SkipConvert` | `-SkipIndex` | `-CheckShardStatus` | combinations  
+**Changelog:** Added "Adding New Source Code to Analysis" section

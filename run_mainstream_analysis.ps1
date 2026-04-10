@@ -167,8 +167,42 @@ function Confirm-OllamaModelsInstalled {
 function Test-OllamaMissingModelError {
     param($ErrorRecord)
 
-    foreach ($Message in @($ErrorRecord.ErrorDetails.Message, $ErrorRecord.Exception.Message)) {
-        if ($Message -and $Message -match 'model' -and $Message -match 'not found') {
+    # Safely collect possible message strings from the ErrorRecord without
+    # assuming ErrorDetails or Exception are present or have a Message property.
+    $candidates = @()
+
+    if ($null -ne $ErrorRecord) {
+        if ($null -ne $ErrorRecord.ErrorDetails) {
+            try {
+                $ed = $ErrorRecord.ErrorDetails.Message
+            } catch {
+                $ed = $null
+            }
+            if ($ed) { $candidates += $ed }
+        }
+
+        if ($null -ne $ErrorRecord.Exception) {
+            try {
+                $ex = $ErrorRecord.Exception.Message
+            } catch {
+                $ex = $null
+            }
+            if ($ex) { $candidates += $ex }
+        }
+
+        # Fallback to the ErrorRecord string representation
+        try {
+            $toStr = $ErrorRecord.ToString()
+        } catch {
+            $toStr = $null
+        }
+        if ($toStr) { $candidates += $toStr }
+    } else {
+        $candidates += [string]$ErrorRecord
+    }
+
+    foreach ($Message in $candidates | Where-Object { $_ -ne $null -and $_ -ne '' }) {
+        if ($Message -match 'model' -and $Message -match 'not found') {
             return $true
         }
     }
