@@ -37,6 +37,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_convert.add_argument("--target", required=True, help="GraphRAG project root.")
     p_convert.add_argument("--include-code", action="store_true", help="Analyse source code files.")
     p_convert.add_argument("--max-chars", type=int, default=200_000, help="Max chars per document.")
+    p_convert.add_argument("--force", action="store_true", help="Re-convert all files even if output already exists.")
 
     # --- index ---
     p_index = sub.add_parser("index", help="Convert files and build GraphRAG index.")
@@ -114,9 +115,15 @@ def _cmd_convert(args: argparse.Namespace) -> int:
         args.target,
         include_code=args.include_code,
         max_chars=args.max_chars,
+        force=args.force,
     )
-    print(f"Converted {len(results)} files → {args.target}/input/")
-    for doc in results:
+    converted = [r for r in results if not r.metadata.get("skipped")]
+    skipped_count = len(results) - len(converted)
+    msg = f"Converted {len(converted)} files"
+    if skipped_count:
+        msg += f", skipped {skipped_count} (already up to date)"
+    print(f"{msg} \u2192 {args.target}/input/")
+    for doc in converted:
         print(f"  {doc.title} ({doc.char_count:,} chars, {doc.format})")
     return 0
 

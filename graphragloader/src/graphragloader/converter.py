@@ -204,6 +204,7 @@ def _extract_zip(
     max_chars: int,
     *,
     include_code: bool = False,
+    force: bool = False,
 ) -> list[ConvertedDocument]:
     """Extract a ZIP archive into a temp dir and convert its contents."""
     try:
@@ -235,6 +236,7 @@ def _extract_zip(
             output_dir=output_dir,
             max_chars=max_chars,
             include_code=include_code,
+            force=force,
             _archive_prefix=archive_path.name,
         )
     except Exception as exc:
@@ -319,6 +321,7 @@ def convert_resources(
     *,
     include_code: bool = False,
     max_chars: int = _MAX_CONTENT_CHARS,
+    force: bool = False,
 ) -> list[ConvertedDocument]:
     """Convert all supported files in *source_dir* to text in ``<target_dir>/input/``.
 
@@ -348,12 +351,20 @@ def convert_resources(
     output_dir = Path(target_dir) / "input"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    return _convert_files(
+    results = _convert_files(
         source_dir=src,
         output_dir=output_dir,
         max_chars=max_chars,
         include_code=include_code,
+        force=force,
     )
+    skipped = sum(1 for r in results if r.metadata.get("skipped"))
+    if skipped:
+        logger.info(
+            "converter: %d / %d files skipped (output already up to date)",
+            skipped, len(results),
+        )
+    return results
 
 
 def _convert_files(
@@ -362,6 +373,7 @@ def _convert_files(
     max_chars: int,
     *,
     include_code: bool = False,
+    force: bool = False,
     _archive_prefix: Optional[str] = None,
 ) -> list[ConvertedDocument]:
     """Internal: convert all files in *source_dir*, write to *output_dir*."""
@@ -425,7 +437,7 @@ def _convert_files(
             logger.debug("converter: LlamaIndex produced no text for %s — skipping", f.name)
             continue
         results.append(
-            _write_output(f, text, output_dir, max_chars)
+            _write_output(f, text, output_dir, max_chars, force=force)
         )
 
     # Phase 2: plain text files (no deps needed).
@@ -434,7 +446,7 @@ def _convert_files(
         if not text or not text.strip():
             continue
         results.append(
-            _write_output(f, text, output_dir, max_chars)
+            _write_output(f, text, output_dir, max_chars, force=force)
         )
 
     # Phase 3: MOBI files.
@@ -443,7 +455,7 @@ def _convert_files(
         if not text or not text.strip():
             continue
         results.append(
-            _write_output(f, text, output_dir, max_chars)
+            _write_output(f, text, output_dir, max_chars, force=force)
         )
 
     # Phase 4: Excel files.
@@ -452,12 +464,12 @@ def _convert_files(
         if not text or not text.strip():
             continue
         results.append(
-            _write_output(f, text, output_dir, max_chars, fmt="excel")
+            _write_output(f, text, output_dir, max_chars, fmt="excel", force=force)
         )
 
     # Phase 5: ZIP archives (recursive extraction).
     for f in archive_files:
-        extracted = _extract_zip(f, output_dir, max_chars, include_code=include_code)
+        extracted = _extract_zip(f, output_dir, max_chars, include_code=include_code, force=force)
         results.extend(extracted)
 
     # Phase 6: source code (when requested).
@@ -468,7 +480,7 @@ def _convert_files(
                 text = analyze_code_files(f)
                 if text and text.strip():
                     results.append(
-                        _write_output(f, text, output_dir, max_chars, fmt="code")
+                        _write_output(f, text, output_dir, max_chars, fmt="code", force=force)
                     )
         except ImportError:
             logger.info(
@@ -479,7 +491,7 @@ def _convert_files(
                 text = _read_plaintext(f)
                 if text and text.strip():
                     results.append(
-                        _write_output(f, text, output_dir, max_chars, fmt="code")
+                        _write_output(f, text, output_dir, max_chars, fmt="code", force=force)
                     )
 
     # Phase 7: unknown extensions — try reading as plain text.
@@ -491,7 +503,7 @@ def _convert_files(
                 logger.debug("converter: %s appears binary — skipping", f.name)
                 continue
             results.append(
-                _write_output(f, text, output_dir, max_chars, fmt="txt")
+                _write_output(f, text, output_dir, max_chars, fmt="txt", force=force)
             )
         else:
             logger.debug("converter: no usable text from %s — skipping", f.name)
@@ -511,8 +523,28 @@ def _write_output(
     max_chars: int,
     *,
     fmt: str | None = None,
+    force: bool = False,
 ) -> ConvertedDocument:
     """Write a single converted document to the output directory."""
+    out_name = _stable_filename(source)
+    out_path = output_dir / out_name
+
+    # Incremental mode: skip files whose output is already up to date.
+    if not force and out_path.exists():
+        try:
+            if source.stat().st_mtime <= out_path.stat().st_mtime:
+                logger.debug("converter: %s — output up to date, skipping", source.name)
+                return ConvertedDocument(
+                    source_path=str(source.resolve()),
+                    target_path=str(out_path.resolve()),
+                    title=source.name,
+                    char_count=0,
+                    format=fmt or source.suffix.lstrip(".") or "txt",
+                    metadata={"size_bytes": source.stat().st_size, "skipped": True},
+                )
+        except OSError:
+            pass  # If stat fails, fall through and re-convert.
+
     if len(text) > max_chars:
         text = text[:max_chars]
         logger.warning("converter: truncated %s to %d chars.", source.name, max_chars)
@@ -520,8 +552,6 @@ def _write_output(
     header = _build_metadata_header(source)
     full_text = header + text
 
-    out_name = _stable_filename(source)
-    out_path = output_dir / out_name
     out_path.write_text(full_text, encoding="utf-8")
 
     return ConvertedDocument(

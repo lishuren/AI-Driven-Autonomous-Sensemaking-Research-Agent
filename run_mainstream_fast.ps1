@@ -396,6 +396,40 @@ function Invoke-ReportStep {
     Log "Saved: $OutFile"
 }
 
+function Show-ModelStatus {
+    param(
+        [string]$Phase,          # e.g. "STARTUP", "INDEXING", "REPORTING"
+        [string]$ActiveModel,    # model currently active for LLM calls
+        [string]$ActiveColor = "Cyan",
+        [switch]$CheckInstalled  # if set, query Ollama and show install status
+    )
+    Write-Host ""
+    Write-Host "══════════════════════════════════════════════" -ForegroundColor DarkGray
+    Write-Host "  MODEL STATUS  ─  $Phase" -ForegroundColor White
+    Write-Host "══════════════════════════════════════════════" -ForegroundColor DarkGray
+    Write-Host "  Index model   : $IndexModel" -ForegroundColor $(if ($ActiveModel -eq $IndexModel) { $ActiveColor } else { "Gray" })
+    Write-Host "  Report model  : $ReportModel" -ForegroundColor $(if ($ActiveModel -eq $ReportModel) { $ActiveColor } else { "Gray" })
+    Write-Host "  Embedding     : $EmbeddingModel" -ForegroundColor Gray
+    Write-Host "  Active now    : $ActiveModel" -ForegroundColor $ActiveColor
+
+    if ($CheckInstalled) {
+        $Tags = Get-OllamaTags -TimeoutSeconds 5
+        if ($Tags) {
+            $Installed = @($Tags.models | ForEach-Object { if ($_.name) { $_.name } })
+            foreach ($M in @($IndexModel, $ReportModel, $EmbeddingModel) | Select-Object -Unique) {
+                $Found = Test-OllamaModelInstalled -ModelName $M -InstalledModels $Installed
+                $StatusIcon  = if ($Found) { "[OK]" } else { "[MISSING]" }
+                $StatusColor = if ($Found) { "Green"  } else { "Red"     }
+                Write-Host "  $StatusIcon $M" -ForegroundColor $StatusColor
+            }
+        } else {
+            Write-Host "  (Ollama not yet reachable — model status unknown)" -ForegroundColor Yellow
+        }
+    }
+    Write-Host "══════════════════════════════════════════════" -ForegroundColor DarkGray
+    Write-Host ""
+}
+
 function Get-ShardStatus {
     $ShardStatusFile = Join-Path $Target ".shard_status.json"
     if (Test-Path $ShardStatusFile) { return Get-Content $ShardStatusFile -Raw | ConvertFrom-Json }
@@ -426,6 +460,7 @@ Log "FAST MODE: max_chars=$ConvertMaxChars  method=$GraphMethod  chunk_size=$Fas
 Log "MODELS: index=$IndexModel  report=$ReportModel  embedding=$EmbeddingModel"
 Log "DISABLE_AIOHTTP_TRANSPORT=$($env:DISABLE_AIOHTTP_TRANSPORT)"
 Log "LITELLM_LOCAL_MODEL_COST_MAP=$($env:LITELLM_LOCAL_MODEL_COST_MAP)"
+Show-ModelStatus -Phase "STARTUP" -ActiveModel $IndexModel -CheckInstalled
 
 if ($CheckShardStatus) {
     Show-ResumptionGuide
@@ -448,6 +483,7 @@ if ($SkipIndex) {
     Confirm-OllamaModelsInstalled -ModelNames @($IndexModel, $EmbeddingModel)
     Wait-OllamaModel     -ModelName $IndexModel
     Wait-OllamaEmbedding -ModelName $EmbeddingModel
+    Show-ModelStatus -Phase "INDEXING" -ActiveModel $IndexModel -CheckInstalled
     Invoke-IndexStep
 }
 
@@ -457,6 +493,7 @@ Log "Switching completion model to $ReportModel for report generation"
 Update-SettingsModel -SettingsPath $SettingsPath -ModelName $ReportModel
 Confirm-OllamaModelsInstalled -ModelNames @($ReportModel)
 Wait-OllamaModel -ModelName $ReportModel
+Show-ModelStatus -Phase "REPORTING" -ActiveModel $ReportModel -CheckInstalled -ActiveColor "Yellow"
 
 $Reports = @(
     @{ Name = "analysis_report";        Question = "Provide a comprehensive analysis of this corpus: major themes, key findings, key entities and their relationships, uncertainties, and actionable conclusions. Include supporting evidence for each finding." },
