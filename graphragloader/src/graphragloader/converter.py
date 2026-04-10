@@ -433,13 +433,22 @@ def _convert_files(
     _progress_done = [0]
     _progress_interval = max(1, _progress_total // 500)   # ~500 updates per run
     _progress_start = time.strftime("%Y-%m-%d %H:%M:%S")
+    _last_log_time = [time.monotonic()]
+    _LOG_INTERVAL_S = 30  # log to console at most every 30 s
+
+    logger.info(
+        "converter: starting — %d files to process (source: %s)",
+        _progress_total, source_dir,
+    )
 
     def _tick(current: Path) -> None:
-        if _progress_file is None:
-            return
         _progress_done[0] += 1
         n = _progress_done[0]
-        if n == 1 or n % _progress_interval == 0 or n >= _progress_total:
+        now = time.monotonic()
+        should_write = n == 1 or n % _progress_interval == 0 or n >= _progress_total
+        should_log   = (now - _last_log_time[0]) >= _LOG_INTERVAL_S or n >= _progress_total
+
+        if should_write and _progress_file is not None:
             try:
                 _progress_file.write_text(
                     json.dumps({
@@ -453,6 +462,14 @@ def _convert_files(
                 )
             except OSError:
                 pass
+
+        if should_log:
+            _last_log_time[0] = now
+            pct = round(100.0 * n / _progress_total, 1)
+            logger.info(
+                "converter: %d / %d files (%.1f%%)  current: %s",
+                n, _progress_total, pct, current.name,
+            )
 
     # Partition files by handling strategy.
     llamaindex_exts: set[str] = set()
@@ -492,8 +509,16 @@ def _convert_files(
             # Unknown extension — try reading as plain text.
             fallback_files.append(f)
 
-    # Phase 1: LlamaIndex for rich formats (PDF, DOCX, EPUB, images, etc.)
+    # Phase 1: LlamaIndex for rich formats (PDF, DOCX, EPUB, etc.)
+    if llamaindex_exts:
+        logger.info(
+            "converter: phase 1/7 — LlamaIndex  (%d files: %s)  [this may take several minutes]",
+            len(llamaindex_candidates),
+            ", ".join(sorted(llamaindex_exts)),
+        )
     llamaindex_results = _use_llamaindex(source_dir, llamaindex_exts) if llamaindex_exts else {}
+    if llamaindex_exts:
+        logger.info("converter: phase 1/7 — LlamaIndex done (%d results)", len(llamaindex_results))
 
     results: list[ConvertedDocument] = []
 
@@ -510,6 +535,8 @@ def _convert_files(
         )
 
     # Phase 2: plain text files (no deps needed).
+    if plaintext_files:
+        logger.info("converter: phase 2/7 — plain text  (%d files)", len(plaintext_files))
     for f in plaintext_files:
         _tick(f)
         text = _read_plaintext(f)
@@ -520,6 +547,8 @@ def _convert_files(
         )
 
     # Phase 3: MOBI files.
+    if mobi_files:
+        logger.info("converter: phase 3/7 — MOBI  (%d files)", len(mobi_files))
     for f in mobi_files:
         _tick(f)
         text = _read_mobi(f)
@@ -530,6 +559,8 @@ def _convert_files(
         )
 
     # Phase 4: Excel files.
+    if excel_files:
+        logger.info("converter: phase 4/7 — Excel  (%d files)", len(excel_files))
     for f in excel_files:
         _tick(f)
         text = _read_excel(f, max_chars=max_chars)
@@ -540,6 +571,8 @@ def _convert_files(
         )
 
     # Phase 5: ZIP archives (recursive extraction).
+    if archive_files:
+        logger.info("converter: phase 5/7 — ZIP archives  (%d files)", len(archive_files))
     for f in archive_files:
         _tick(f)
         extracted = _extract_zip(f, output_dir, max_chars, include_code=include_code, force=force)
@@ -547,6 +580,7 @@ def _convert_files(
 
     # Phase 6: source code (when requested).
     if code_files and include_code:
+        logger.info("converter: phase 6/7 — source code  (%d files)", len(code_files))
         try:
             from .code_analyzer import analyze_code_files
             for f in code_files:
@@ -570,6 +604,8 @@ def _convert_files(
                     )
 
     # Phase 7: unknown extensions — try reading as plain text.
+    if fallback_files:
+        logger.info("converter: phase 7/7 — fallback plain-text  (%d files)", len(fallback_files))
     for f in fallback_files:
         _tick(f)
         text = _read_plaintext(f)
