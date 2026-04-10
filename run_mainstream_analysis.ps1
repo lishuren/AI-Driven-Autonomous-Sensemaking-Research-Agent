@@ -364,7 +364,7 @@ function Invoke-IndexStep {
     $ShardStatus = @{}
     if (Test-Path $ShardStatusFile) {
         $ShardStatus = Get-Content $ShardStatusFile -Raw | ConvertFrom-Json -AsHashtable
-        Log "Resuming from prior checkpoint"
+        Log "Found prior completion marker; re-running index with preserved input/cache"
     }
     $IndexArgs = @(
         "index",
@@ -426,8 +426,8 @@ function Show-ResumptionGuide {
         Write-Host "To resume from where you left off, run:" -ForegroundColor White
         Write-Host '& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1" -SkipConvert' -ForegroundColor Green
         Write-Host ""
-        Write-Host "This will skip convert (saves 30-40 min) and resume index from the prior point." -ForegroundColor Gray
-        Write-Host "LLM response cache is preserved for significant speedup on recomputation." -ForegroundColor Gray
+        Write-Host "This will skip convert (saves 30-40 min) and restart the index using the existing input/output folders." -ForegroundColor Gray
+        Write-Host "LLM response cache is preserved, so previously completed requests can be reused during recomputation." -ForegroundColor Gray
         Write-Host ""
     }
 }

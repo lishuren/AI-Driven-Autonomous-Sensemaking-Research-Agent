@@ -1,8 +1,8 @@
-# GraphRAG Mainstream Analysis — Shard Checkpoint & Resume Guide
+# GraphRAG Mainstream Analysis — Cache-Aware Restart Guide
 
 ## Overview
 
-The `run_mainstream_analysis.ps1` script orchestrates a three-step GraphRAG workflow with built-in checkpoint recovery for long-running jobs:
+The `run_mainstream_analysis.ps1` script orchestrates a three-step GraphRAG workflow for long-running jobs:
 
 1. **Convert** — Transform D:\Mainstream docs into GraphRAG input (30–40 min, one-time)
 2. **Index** — GraphRAG extract_graph, build, compute (8–10 days, most prone to interruption)
@@ -10,19 +10,19 @@ The `run_mainstream_analysis.ps1` script orchestrates a three-step GraphRAG work
 
 ## Key Improvements
 
-### Shard Checkpoint Tracking
+### Completion Marker Tracking
 - After index completes, status is saved to `.shard_status.json` in the target folder
-- On restart, the script detects prior checkpoints and logs resumption context
-- Checkpoint records timestamp and completion state
+- The file records completion timestamp and acts as a run marker, not a mid-index checkpoint
+- If indexing is interrupted before completion, GraphRAG restarts the index workflow and relies on preserved cache for speed
 
 ### Resume Flags
-- **`-SkipConvert`** — Skip the convert step, reuse existing input, resume index from prior checkpoint
+- **`-SkipConvert`** — Skip the convert step and reuse existing input while restarting index with preserved cache
 - **`-CheckShardStatus`** — Query-only mode; shows last checkpoint without running any workflow step
 - **`-SkipIndex`** — Skip indexing, regenerate reports only (assumes index output exists)
 
 ### Auto-Resume Guidance
 If index is interrupted:
-- Script logs checkpoint timestamp
+- Script preserves input and LiteLLM cache
 - On script exit, displays resumption instructions automatically
 - Clear one-liner command to re-run with cache intact
 
@@ -39,9 +39,9 @@ Runs: convert → index → reports (full 8–10+ days)
 & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1" -SkipConvert
 ```
 - Skips convert (saves 30–40 min)
-- Resumes index near prior stopping point
+- Restarts the index workflow from the beginning of Step 2
 - Input folder and cache reused
-- Projected loss window: ~100 rows of in-flight work
+- Previously completed LLM requests can be served from cache instead of recomputed from scratch
 
 ### Check Status Without Running
 ```powershell
@@ -66,18 +66,18 @@ Runs: convert → index → reports (full 8–10+ days)
 - Extract_graph processes 30,108 total text units
 - Cache preserves completed LLM request/response pairs
 - On Ctrl+C, ~100 rows of in-flight computation is lost (worst case)
-- Subsequent resume benefits from full cache hit on prior 30,008 rows
+- Subsequent restart can benefit from cache hits for prior completed rows, even though the workflow counter starts over
 
 ### Cache Mechanism
 - LiteLLM stores request/response pairs in `D:\mainstreamGraphRAG\cache`
 - Ollama embedding and completion cache is automatically leveraged
-- Resume with `-SkipConvert` preserves this cache
+- Restart with `-SkipConvert` preserves this cache
 - Recomputation of cached rows is near-instant (no API calls)
 
 ### Logs & Checkpoints
 - Main log: `D:\mainstreamGraphRAG\run_mainstream_analysis.log`
-- Checkpoint file: `D:\mainstreamGraphRAG\.shard_status.json`
-- Each resume appends to log with timestamp and checkpoint info
+- Completion marker: `D:\mainstreamGraphRAG\.shard_status.json`
+- Each restart appends to log with timestamp and run context
 - Extract_graph progress is traceable via indexing-engine.log
 
 ## Workflow Timeline & Expectations
