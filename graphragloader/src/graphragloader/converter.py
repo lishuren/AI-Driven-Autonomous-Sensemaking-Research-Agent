@@ -175,8 +175,13 @@ def _read_plaintext(path: Path) -> Optional[str]:
         return None
 
 
-def _read_excel(path: Path) -> Optional[str]:
-    """Convert an Excel workbook into text (one section per sheet)."""
+def _read_excel(path: Path, max_chars: int = _MAX_CONTENT_CHARS) -> Optional[str]:
+    """Convert an Excel workbook into text (one section per sheet).
+
+    Reads sheets one at a time and stops early once accumulated text already
+    exceeds *max_chars*. Caps each sheet at *_EXCEL_MAX_ROWS* rows to avoid
+    spending minutes loading a massive sheet that will be truncated anyway.
+    """
     if not _HAS_PANDAS:
         logger.info(
             "converter: skipping Excel %s — pandas not installed.  "
@@ -187,20 +192,39 @@ def _read_excel(path: Path) -> Optional[str]:
 
     import pandas as pd  # noqa: WPS433
 
+    # Row cap: each row is typically 50–500 chars; 2,000 rows comfortably
+    # covers 100,000 chars while keeping read time under a second for most files.
+    _EXCEL_MAX_ROWS = 2000
+
     try:
-        sheets = pd.read_excel(path, sheet_name=None, dtype=str)
+        xf = pd.ExcelFile(path)
+        sheet_names = xf.sheet_names
     except Exception as exc:
-        logger.warning("converter: cannot read Excel %s — %s", path, exc)
+        logger.warning("converter: cannot open Excel %s — %s", path, exc)
         return None
 
     parts: list[str] = []
-    for sheet_name, df in sheets.items():
+    accumulated = 0
+
+    for sheet_name in sheet_names:
+        if accumulated >= max_chars:
+            logger.debug(
+                "converter: %s — stopping at sheet '%s' (char limit reached)",
+                path.name, sheet_name,
+            )
+            break
+        try:
+            df = xf.parse(sheet_name, dtype=str, nrows=_EXCEL_MAX_ROWS)
+        except Exception as exc:
+            logger.warning("converter: skipping sheet '%s' in %s — %s", sheet_name, path.name, exc)
+            continue
         if df.empty:
             continue
         header = f"## Sheet: {sheet_name}\n\n"
-        # Render as a pipe-delimited table for readability.
         table = df.fillna("").to_csv(sep="\t", index=False)
-        parts.append(header + table)
+        chunk = header + table
+        parts.append(chunk)
+        accumulated += len(chunk)
 
     return "\n\n".join(parts) if parts else None
 
@@ -508,7 +532,7 @@ def _convert_files(
     # Phase 4: Excel files.
     for f in excel_files:
         _tick(f)
-        text = _read_excel(f)
+        text = _read_excel(f, max_chars=max_chars)
         if not text or not text.strip():
             continue
         results.append(
