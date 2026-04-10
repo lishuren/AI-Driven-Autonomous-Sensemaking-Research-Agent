@@ -153,6 +153,23 @@ if ($latestOutput) {
     Write-Host ("Latest output:     {0}" -f $latestOutput)
 }
 
+$progressFile = Join-Path $resolvedTarget ".convert_progress"
+if (Test-Path -LiteralPath $progressFile -PathType Leaf) {
+    try {
+        $prog = Get-Content -LiteralPath $progressFile -Raw -ErrorAction Stop | ConvertFrom-Json
+        $pct     = "{0:N1}" -f [double]$prog.pct
+        $done    = "{0:N0}" -f [int]$prog.done
+        $total   = "{0:N0}" -f [int]$prog.total
+        Write-Host ("Convert progress:  {0}%  ({1} / {2} files)") -f $pct, $done, $total -ForegroundColor Cyan
+        Write-Host ("Current file:      {0}" -f $prog.current) -ForegroundColor Cyan
+        if ($prog.started) {
+            Write-Host ("Convert started:   {0}" -f $prog.started) -ForegroundColor DarkGray
+        }
+    } catch {
+        # progress file may be mid-write; skip silently
+    }
+}
+
 Write-Host ""
 if ($matchingProcesses.Count -gt 0) {
     Write-Host "Active processes for this target:"

@@ -236,26 +236,37 @@ function Wait-OllamaEmbedding {
     throw "Embedding model did not become ready within $TimeoutSeconds s: $ModelName"
 }
 
-# Patches settings.yaml with fast-mode chunk sizes.
-# Called after every Initialize-Settings so the values survive regeneration.
 # Swaps the completion model name inside settings.yaml.
 # Called between the index and report phases to hot-swap models.
 function Update-SettingsModel {
     param([string]$SettingsPath, [string]$ModelName)
     if (-not (Test-Path $SettingsPath)) { return }
 
-    $Content = Get-Content -Path $SettingsPath -Raw
-    # Replace the model: line that immediately follows default_completion_model block.
-    $New = [regex]::Replace(
-        $Content,
-        '(?m)(default_completion_model:.*?\n(?:\s+.+\n)*?\s+model:)\s*\S+',
-        "`${1} $ModelName"
-    )
-    if ($New -ne $Content) {
-        Set-Content -Path $SettingsPath -Value $New -Encoding UTF8 -NoNewline
+    # Line-by-line scan: find "model:" inside the default_completion_model block.
+    # Avoids CRLF/LF regex hazards and fragile multiline lookaheads.
+    $Lines = Get-Content -LiteralPath $SettingsPath -Encoding UTF8
+    $InBlock = $false
+    $Patched = $false
+
+    $NewLines = foreach ($Line in $Lines) {
+        # Enter block when we see the (indented) default_completion_model key.
+        if ($Line -match '^\s+default_completion_model:') { $InBlock = $true }
+        # Exit block on any top-level (non-indented, non-empty) key.
+        elseif ($InBlock -and $Line -match '^[^ \t]' -and $Line.Trim() -ne '') { $InBlock = $false }
+
+        # Patch the first "model:" line inside the block (NOT "model_provider:").
+        if ($InBlock -and -not $Patched -and $Line -match '^(\s+model:)\s*\S+') {
+            $Line = $Matches[1] + " $ModelName"
+            $Patched = $true
+        }
+        $Line
+    }
+
+    if ($Patched) {
+        $NewLines | Set-Content -LiteralPath $SettingsPath -Encoding UTF8
         Log "settings.yaml: completion model set to $ModelName"
     } else {
-        Log "settings.yaml: model line not matched — verify settings.yaml format" "WARN"
+        Log "settings.yaml: 'model:' key not found in default_completion_model block -- check settings.yaml" "WARN"
     }
 }
 
@@ -404,9 +415,9 @@ function Show-ModelStatus {
         [switch]$CheckInstalled  # if set, query Ollama and show install status
     )
     Write-Host ""
-    Write-Host "══════════════════════════════════════════════" -ForegroundColor DarkGray
-    Write-Host "  MODEL STATUS  ─  $Phase" -ForegroundColor White
-    Write-Host "══════════════════════════════════════════════" -ForegroundColor DarkGray
+    Write-Host "==============================================" -ForegroundColor DarkGray
+    Write-Host "  MODEL STATUS  --  $Phase" -ForegroundColor White
+    Write-Host "==============================================" -ForegroundColor DarkGray
     Write-Host "  Index model   : $IndexModel" -ForegroundColor $(if ($ActiveModel -eq $IndexModel) { $ActiveColor } else { "Gray" })
     Write-Host "  Report model  : $ReportModel" -ForegroundColor $(if ($ActiveModel -eq $ReportModel) { $ActiveColor } else { "Gray" })
     Write-Host "  Embedding     : $EmbeddingModel" -ForegroundColor Gray
@@ -423,10 +434,10 @@ function Show-ModelStatus {
                 Write-Host "  $StatusIcon $M" -ForegroundColor $StatusColor
             }
         } else {
-            Write-Host "  (Ollama not yet reachable — model status unknown)" -ForegroundColor Yellow
+            Write-Host "  (Ollama not yet reachable -- model status unknown)" -ForegroundColor Yellow
         }
     }
-    Write-Host "══════════════════════════════════════════════" -ForegroundColor DarkGray
+    Write-Host "==============================================" -ForegroundColor DarkGray
     Write-Host ""
 }
 

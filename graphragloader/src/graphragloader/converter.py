@@ -12,10 +12,12 @@ Public API
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import shutil
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,12 +47,17 @@ class ConvertedDocument:
 # Extensions that LlamaIndex SimpleDirectoryReader handles natively.
 _LLAMAINDEX_EXTENSIONS = {
     ".pdf", ".docx", ".epub", ".csv", ".md", ".txt",
-    ".jpg", ".jpeg", ".png",
-    ".mp3", ".mp4",
     ".pptx", ".ppt", ".pptm",
     ".ipynb",
     ".hwp",
     ".mbox",
+}
+
+# Image and audio/video formats: no extractable text, skip silently.
+_IMAGE_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".webp",
+    ".svg", ".ico", ".heic", ".heif",
+    ".mp3", ".mp4", ".wav", ".ogg", ".flac", ".aac", ".avi", ".mov", ".mkv",
 }
 
 # Plain text extensions we handle directly (fast, no deps).
@@ -238,6 +245,7 @@ def _extract_zip(
             include_code=include_code,
             force=force,
             _archive_prefix=archive_path.name,
+            _track_progress=False,  # top-level call owns the progress file
         )
     except Exception as exc:
         logger.warning("converter: failed to process ZIP %s — %s", archive_path, exc)
@@ -364,6 +372,12 @@ def convert_resources(
             "converter: %d / %d files skipped (output already up to date)",
             skipped, len(results),
         )
+    # Clean up progress file when the run completes.
+    progress_file = output_dir.parent / ".convert_progress"
+    try:
+        progress_file.unlink(missing_ok=True)
+    except OSError:
+        pass
     return results
 
 
@@ -375,6 +389,7 @@ def _convert_files(
     include_code: bool = False,
     force: bool = False,
     _archive_prefix: Optional[str] = None,
+    _track_progress: bool = True,
 ) -> list[ConvertedDocument]:
     """Internal: convert all files in *source_dir*, write to *output_dir*."""
     # Discover all files.
@@ -385,6 +400,35 @@ def _convert_files(
     if not all_files:
         logger.info("converter: no files found in %s", source_dir)
         return []
+
+    # ── Progress tracking ────────────────────────────────────────────────────
+    # Write a .convert_progress JSON file to the target root so external
+    # tools (e.g. check_status.ps1) can see which file is being processed.
+    _progress_file = output_dir.parent / ".convert_progress" if _track_progress else None
+    _progress_total = len(all_files)
+    _progress_done = [0]
+    _progress_interval = max(1, _progress_total // 500)   # ~500 updates per run
+    _progress_start = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    def _tick(current: Path) -> None:
+        if _progress_file is None:
+            return
+        _progress_done[0] += 1
+        n = _progress_done[0]
+        if n == 1 or n % _progress_interval == 0 or n >= _progress_total:
+            try:
+                _progress_file.write_text(
+                    json.dumps({
+                        "current": str(current),
+                        "done": n,
+                        "total": _progress_total,
+                        "pct": round(100.0 * n / _progress_total, 1),
+                        "started": _progress_start,
+                    }),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
 
     # Partition files by handling strategy.
     llamaindex_exts: set[str] = set()
@@ -418,8 +462,8 @@ def _convert_files(
         elif ext in _PLAINTEXT_EXTENSIONS | _CODE_EXTENSIONS:
             # Treat unrecognised code as plain text when include_code is False.
             plaintext_files.append(f)
-        elif ext in _SKIP_EXTENSIONS:
-            logger.debug("converter: skipping known-binary file %s", f.name)
+        elif ext in _SKIP_EXTENSIONS or ext in _IMAGE_EXTENSIONS:
+            logger.debug("converter: skipping binary/media file %s", f.name)
         else:
             # Unknown extension — try reading as plain text.
             fallback_files.append(f)
@@ -431,6 +475,7 @@ def _convert_files(
 
     # Write LlamaIndex results.
     for f in llamaindex_candidates:
+        _tick(f)
         key = str(f.resolve())
         text = llamaindex_results.get(key, "")
         if not text or not text.strip():
@@ -442,6 +487,7 @@ def _convert_files(
 
     # Phase 2: plain text files (no deps needed).
     for f in plaintext_files:
+        _tick(f)
         text = _read_plaintext(f)
         if not text or not text.strip():
             continue
@@ -451,6 +497,7 @@ def _convert_files(
 
     # Phase 3: MOBI files.
     for f in mobi_files:
+        _tick(f)
         text = _read_mobi(f)
         if not text or not text.strip():
             continue
@@ -460,6 +507,7 @@ def _convert_files(
 
     # Phase 4: Excel files.
     for f in excel_files:
+        _tick(f)
         text = _read_excel(f)
         if not text or not text.strip():
             continue
@@ -469,6 +517,7 @@ def _convert_files(
 
     # Phase 5: ZIP archives (recursive extraction).
     for f in archive_files:
+        _tick(f)
         extracted = _extract_zip(f, output_dir, max_chars, include_code=include_code, force=force)
         results.extend(extracted)
 
@@ -477,6 +526,7 @@ def _convert_files(
         try:
             from .code_analyzer import analyze_code_files
             for f in code_files:
+                _tick(f)
                 text = analyze_code_files(f)
                 if text and text.strip():
                     results.append(
@@ -488,6 +538,7 @@ def _convert_files(
                 len(code_files),
             )
             for f in code_files:
+                _tick(f)
                 text = _read_plaintext(f)
                 if text and text.strip():
                     results.append(
@@ -496,6 +547,7 @@ def _convert_files(
 
     # Phase 7: unknown extensions — try reading as plain text.
     for f in fallback_files:
+        _tick(f)
         text = _read_plaintext(f)
         if text and text.strip():
             # Check if the content looks like binary garbage.
