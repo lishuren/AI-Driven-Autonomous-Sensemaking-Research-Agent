@@ -50,6 +50,7 @@ $env:LITELLM_LOCAL_MODEL_COST_MAP = "True"
 # ── Paths ────────────────────────────────────────────────────────────────────
 $LoaderExe  = "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\graphragloader.exe"
 $GraphRagExe = "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\graphrag.exe"
+$PythonExe  = "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\python.exe"
 $Source     = "D:\Mainstream"
 $Target     = "D:\mainstreamGraphRAG"
 $ReportsDir = Join-Path $Target "reports"
@@ -371,6 +372,11 @@ function Invoke-IndexStep {
         $ShardStatus = Get-Content $ShardStatusFile -Raw | ConvertFrom-Json -AsHashtable
         Log "Found prior completion marker; re-running index with preserved input/cache"
     }
+    # Ensure NLTK punkt_tab is present before the NLP pipeline runs (a corrupted
+    # or missing download causes a silent "File is not a zip file" crash).
+    Log "Ensuring NLTK punkt_tab tokenizer is available..."
+    & $PythonExe -c "import nltk; nltk.download('punkt_tab', quiet=True); nltk.download('averaged_perceptron_tagger_eng', quiet=True)" 2>&1 | Out-Null
+
     $IndexArgs = @("index", "--root", $Target, "--method", $GraphMethod)
     Log "Running GraphRAG index (fast)..."
     & $GraphRagExe @IndexArgs
