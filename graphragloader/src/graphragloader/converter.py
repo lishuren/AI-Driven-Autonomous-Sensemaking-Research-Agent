@@ -776,7 +776,7 @@ def _convert_files(
         lli_need = [f for f in llamaindex_candidates if not _is_up_to_date(f, output_dir)]
         if lli_skip:
             logger.info(
-                "converter: phase 1/7 — LlamaIndex  skipping %d / %d already up-to-date files",
+                "converter: phase 1/10 — LlamaIndex  skipping %d / %d already up-to-date files",
                 len(lli_skip), len(llamaindex_candidates),
             )
             for f in lli_skip:
@@ -793,12 +793,12 @@ def _convert_files(
 
     if lli_need:
         logger.info(
-            "converter: phase 1/7 — LlamaIndex  (%d files: %s)  [this may take several minutes]",
+            "converter: phase 1/10 — LlamaIndex  (%d files: %s)  [this may take several minutes]",
             len(lli_need), ", ".join(sorted(llamaindex_exts)),
         )
     llamaindex_results = _use_llamaindex(source_dir, llamaindex_exts, files=lli_need) if lli_need else {}
     if lli_need:
-        logger.info("converter: phase 1/7 — LlamaIndex done (%d results)", len(llamaindex_results))
+        logger.info("converter: phase 1/10 — LlamaIndex done (%d results)", len(llamaindex_results))
 
     # Write LlamaIndex results.
     for f in lli_need:
