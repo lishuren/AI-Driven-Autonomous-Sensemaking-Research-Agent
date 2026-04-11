@@ -378,9 +378,29 @@ function Invoke-IndexStep {
     # Run 'graphragloader\check_status.ps1' section 4.8 if this still fails.
     Log "Ensuring NLTK data packages are available..."
     & $PythonExe -c @"
-import nltk
-for pkg in ['punkt','punkt_tab','averaged_perceptron_tagger','averaged_perceptron_tagger_eng','maxent_ne_chunker','maxent_ne_chunker_tab','words','stopwords','brown']:
-    nltk.download(pkg, quiet=True)
+import nltk, sys
+pkg_paths = {
+    'punkt':                          'tokenizers/punkt',
+    'punkt_tab':                      'tokenizers/punkt_tab',
+    'averaged_perceptron_tagger':     'taggers/averaged_perceptron_tagger',
+    'averaged_perceptron_tagger_eng': 'taggers/averaged_perceptron_tagger_eng',
+    'maxent_ne_chunker':              'chunkers/maxent_ne_chunker',
+    'maxent_ne_chunker_tab':          'chunkers/maxent_ne_chunker_tab',
+    'words':                          'corpora/words',
+    'stopwords':                      'corpora/stopwords',
+    'brown':                          'corpora/brown',
+}
+missing = []
+for pkg, path in pkg_paths.items():
+    try:
+        nltk.data.find(path)
+    except LookupError:
+        missing.append(pkg)
+for pkg in missing:
+    try:
+        nltk.download(pkg, quiet=True)
+    except Exception as e:
+        print(f'Warning: could not download NLTK package {pkg}: {e}', file=sys.stderr)
 "@ 2>&1 | Out-Null
 
     $IndexArgs = @("index", "--root", $Target, "--method", $GraphMethod)
