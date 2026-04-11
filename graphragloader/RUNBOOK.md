@@ -136,6 +136,26 @@ Expected output when working: `CUDA: True | NVIDIA GeForce ...`
 **If you do not have an NVIDIA GPU** the CPU warning is expected and harmless —
 transcription will be slow but correct.
 
+### 4.7 `Starting workflow: load_input_documents` — no progress for 10–30+ minutes
+
+This is **expected** for large corpora.  The `load_input_documents` workflow reads
+every `.txt` file from `input/` into memory (as a single bulk DataFrame/Parquet
+shard) before the pipeline can advance.  With ~191 k files the disk I/O alone
+takes 10–30 minutes and GraphRAG prints nothing during that time.
+
+When the load finishes the next line will appear:
+
+```
+Starting workflow: create_base_text_units
+```
+
+Until then, just let it run.  The GPU is idle at this stage — it is a pure
+disk read.  You can verify the process is still alive with:
+
+```powershell
+tasklist | findstr /I graphrag
+```
+
 ## 5. Process and Runtime Behavior
 
 - Seeing 1-2 heavy Python processes during indexing is normal.
