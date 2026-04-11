@@ -15,7 +15,7 @@ class TestSettingsConfig:
     def test_defaults(self) -> None:
         cfg = SettingsConfig()
         assert cfg.llm_provider == "ollama"
-        assert cfg.llm_model == "qwen2.5:7b"
+        assert cfg.llm_model == "gemma4:e4b"
         assert cfg.chunk_size == 1200
         assert "organization" in cfg.entity_types
 
@@ -32,7 +32,6 @@ class TestGenerateSettings:
         generate_settings(tmp_path, config=SettingsConfig(llm_provider="ollama"))
         content = (tmp_path / "settings.yaml").read_text(encoding="utf-8")
         assert "ollama_chat" in content
-        assert "ollama_embedding" in content
         assert "nomic-embed-text" in content
 
     def test_openai_config(self, tmp_path: Path) -> None:

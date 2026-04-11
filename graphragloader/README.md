@@ -37,12 +37,13 @@ For a native PowerShell runtime check on Windows, run:
 | Category | Extensions |
 |----------|-----------|
 | Text | `.md`, `.txt`, `.rst`, `.csv`, `.tsv`, `.log`, `.json`, `.yaml`, `.yml`, `.toml`, `.ini`, `.cfg`, `.xml`, `.html` |
-| Documents | `.pdf`, `.docx`, `.epub`, `.mobi`, `.pptx` |
+| Documents | `.pdf`, `.docx`, `.epub`, `.mobi`, `.pptx`, `.ppsx`, `.pptm` |
+| Legacy Office | `.doc`, `.ppt`, `.pps` (requires LibreOffice on PATH) |
 | Spreadsheets | `.xlsx`, `.xls`, `.xlsb`, `.xlsm`, `.ods` |
 | Notebooks | `.ipynb` |
-| Images | `.jpg`, `.jpeg`, `.png` |
+| Images | `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.webp` (OCR with `[ocr]`) |
 | Audio/Video | `.mp3`, `.mp4` |
-| Archives | `.zip` (extracted and contents converted recursively) |
+| Archives | `.zip`, `.rar` (RAR requires `[rar]`; both extracted and contents converted recursively) |
 | Source Code | `.py`, `.js`, `.ts`, `.tsx`, `.java`, `.cs`, `.go`, `.rs`, `.c`, `.cpp`, `.h`, `.sql`, `.ps1`, `.sh`, … |
 | Unknown | Any unrecognized extension is tried as plain text; binary-looking content is skipped |
 
@@ -64,6 +65,7 @@ For a native PowerShell runtime check on Windows, run:
 |-------|----------|
 | `[excel]` | `.xls`, `.xlsx` support via pandas + openpyxl + xlrd |
 | `[code]` | Structural code analysis via tree-sitter |
-| `[ocr]` | OCR for scanned PDFs via pytesseract |
+| `[ocr]` | OCR for images and scanned PDFs via pytesseract + pdf2image (requires Tesseract and Poppler installed) |
 | `[mobi]` | `.mobi` ebook support |
+| `[rar]` | `.rar` archive extraction via rarfile (requires unrar binary on PATH) |
 | `[all]` | Everything above plus dev tools |

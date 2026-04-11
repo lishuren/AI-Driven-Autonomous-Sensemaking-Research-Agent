@@ -33,6 +33,7 @@ code = [
 ocr = [
     "pytesseract>=0.3",
     "Pillow>=10",
+    "pdf2image>=1.16",
 ]
 mobi = [
     "mobi>=0.3",
@@ -43,12 +44,15 @@ excel = [
     "openpyxl>=3.1",
     "xlrd>=2.0",
 ]
+rar = [
+    "rarfile>=4.0",
+]
 dev = [
     "pytest>=8,<9",
     "pytest-asyncio>=0.23,<1",
 ]
 all = [
-    "graphragloader[code,ocr,mobi,excel,dev]",
+    "graphragloader[code,ocr,mobi,excel,rar,dev]",
 ]
 
 [tool.setuptools]

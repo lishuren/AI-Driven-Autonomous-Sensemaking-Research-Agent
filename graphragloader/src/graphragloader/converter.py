@@ -47,11 +47,20 @@ class ConvertedDocument:
 # Extensions that LlamaIndex SimpleDirectoryReader handles natively.
 _LLAMAINDEX_EXTENSIONS = {
     ".pdf", ".docx", ".epub", ".csv", ".md", ".txt",
-    ".pptx", ".ppt", ".pptm",
+    ".pptx",
     ".ipynb",
     ".hwp",
     ".mbox",
 }
+
+# PowerPoint Show / Macro formats (OOXML zip-based — same structure as .pptx).
+_PPTX_LIKE_EXTENSIONS = {".ppsx", ".pptm"}
+
+# Legacy binary Office formats — try LibreOffice subprocess conversion.
+_LEGACY_OFFICE_EXTENSIONS = {".doc", ".ppt", ".pps"}
+
+# RAR archives (optional dep: rarfile).
+_RAR_EXTENSIONS = {".rar"}
 
 # Image and audio/video formats: no extractable text, skip silently.
 _IMAGE_EXTENSIONS = {
@@ -88,8 +97,9 @@ _ARCHIVE_EXTENSIONS = {".zip"}
 _SKIP_EXTENSIONS = {
     ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",
     ".iso", ".img", ".dmg",
-    ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz",
+    ".7z", ".tar", ".gz", ".bz2", ".xz",
     ".db", ".sqlite", ".sqlite3",
+    ".chm", ".tn6", ".tne",
 }
 
 _MAX_CONTENT_CHARS = 200_000
@@ -113,6 +123,28 @@ _HAS_PANDAS = False
 try:
     import pandas as _pd  # noqa: F401
     _HAS_PANDAS = True
+except ImportError:
+    pass
+
+_HAS_PPTX = False
+try:
+    from pptx import Presentation as _Presentation  # noqa: F401
+    _HAS_PPTX = True
+except ImportError:
+    pass
+
+_HAS_RARFILE = False
+try:
+    import rarfile as _rarfile_lib  # noqa: F401
+    _HAS_RARFILE = True
+except ImportError:
+    pass
+
+_HAS_OCR = False
+try:
+    import pytesseract as _pytesseract  # noqa: F401
+    from PIL import Image as _PIL_Image  # noqa: F401
+    _HAS_OCR = True
 except ImportError:
     pass
 
@@ -287,6 +319,194 @@ def _extract_zip(
         return []
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _read_pptx_like(path: Path) -> Optional[str]:
+    """Extract text from OOXML PowerPoint-family files (.ppsx, .pptm) via python-pptx.
+
+    These formats are structurally identical to .pptx (ZIP-based OOXML), so
+    python-pptx can open them regardless of the file extension.
+    """
+    if not _HAS_PPTX:
+        logger.info(
+            "converter: skipping %s — python-pptx not available "
+            "(usually installed with llama-index-readers-file).",
+            path,
+        )
+        return None
+    try:
+        from pptx import Presentation  # noqa: WPS433
+        prs = Presentation(str(path))
+        parts: list[str] = []
+        for i, slide in enumerate(prs.slides, 1):
+            texts = [
+                shape.text.strip()
+                for shape in slide.shapes
+                if hasattr(shape, "text") and shape.text.strip()
+            ]
+            if texts:
+                parts.append(f"## Slide {i}\n\n" + "\n".join(texts))
+        return "\n\n".join(parts) if parts else None
+    except Exception as exc:
+        logger.warning("converter: cannot read %s — %s", path, exc)
+        return None
+
+
+def _read_via_libreoffice(path: Path) -> Optional[str]:
+    """Convert a legacy Office binary file (.doc, .ppt, .pps) to text via LibreOffice headless.
+
+    Requires LibreOffice to be installed.  The ``soffice`` or ``libreoffice``
+    executable must be on the system PATH.
+    """
+    import shutil as _shutil
+    import subprocess
+
+    soffice = _shutil.which("soffice") or _shutil.which("libreoffice")
+    if not soffice:
+        logger.info(
+            "converter: skipping %s — LibreOffice (soffice) not found on PATH.  "
+            "Install LibreOffice to convert .doc / .ppt / .pps files.",
+            path,
+        )
+        return None
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="graphragloader_lo_"))
+    try:
+        result = subprocess.run(
+            [soffice, "--headless", "--convert-to", "txt:Text", "--outdir", str(tmpdir), str(path)],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "converter: LibreOffice failed for %s — %s",
+                path, result.stderr.strip() or result.stdout.strip(),
+            )
+            return None
+        out_file = tmpdir / (path.stem + ".txt")
+        if not out_file.exists():
+            candidates = list(tmpdir.glob("*.txt"))
+            if not candidates:
+                logger.warning("converter: LibreOffice produced no output for %s", path)
+                return None
+            out_file = candidates[0]
+        return out_file.read_text(encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired:
+        logger.warning("converter: LibreOffice timed out for %s", path)
+        return None
+    except Exception as exc:
+        logger.warning("converter: LibreOffice error for %s — %s", path, exc)
+        return None
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _extract_rar(
+    archive_path: Path,
+    output_dir: Path,
+    max_chars: int,
+    *,
+    include_code: bool = False,
+    force: bool = False,
+) -> list[ConvertedDocument]:
+    """Extract a RAR archive into a temp dir and convert its contents.
+
+    Requires the ``rarfile`` package: ``pip install 'graphragloader[rar]'``.
+    """
+    if not _HAS_RARFILE:
+        logger.info(
+            "converter: skipping %s — rarfile not installed.  "
+            "Install with: pip install 'graphragloader[rar]'",
+            archive_path,
+        )
+        return []
+
+    import rarfile  # noqa: WPS433
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="graphragloader_rar_"))
+    try:
+        with rarfile.RarFile(str(archive_path)) as rf:
+            total_size = sum(
+                info.file_size for info in rf.infolist() if not info.is_dir()
+            )
+            if total_size > 500 * 1024 * 1024:
+                logger.warning(
+                    "converter: RAR %s too large (%d bytes uncompressed) — skipping",
+                    archive_path, total_size,
+                )
+                return []
+            rf.extractall(str(tmpdir))
+
+        return _convert_files(
+            source_dir=tmpdir,
+            output_dir=output_dir,
+            max_chars=max_chars,
+            include_code=include_code,
+            force=force,
+            _archive_prefix=archive_path.name,
+            _track_progress=False,
+        )
+    except Exception as exc:
+        logger.warning("converter: failed to process RAR %s — %s", archive_path, exc)
+        return []
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _read_ocr_image(path: Path) -> Optional[str]:
+    """Extract text from an image file using Tesseract OCR.
+
+    Requires the ``[ocr]`` extra: ``pip install 'graphragloader[ocr]'``.
+    Also supports image-based PDFs when called as a fallback after LlamaIndex
+    returns empty content.
+    """
+    if not _HAS_OCR:
+        logger.info(
+            "converter: skipping OCR for %s — pytesseract/Pillow not installed.  "
+            "Install with: pip install 'graphragloader[ocr]'",
+            path,
+        )
+        return None
+    try:
+        import pytesseract  # noqa: WPS433
+        from PIL import Image  # noqa: WPS433
+
+        img = Image.open(str(path))
+        text = pytesseract.image_to_string(img, timeout=120)
+        return text.strip() or None
+    except Exception as exc:
+        logger.warning("converter: OCR failed for %s — %s", path, exc)
+        return None
+
+
+def _read_pdf_with_ocr(path: Path) -> Optional[str]:
+    """Render each PDF page as an image and OCR it.
+
+    Used as a fallback when LlamaIndex extracts no text (scanned/image PDF).
+    Requires both the ``[ocr]`` extra and ``pdf2image`` / ``poppler``.
+    """
+    if not _HAS_OCR:
+        return None
+    try:
+        import pytesseract  # noqa: WPS433
+        from pdf2image import convert_from_path  # noqa: WPS433
+
+        pages = convert_from_path(str(path), dpi=150)
+        parts: list[str] = []
+        for i, page in enumerate(pages, 1):
+            text = pytesseract.image_to_string(page, timeout=120).strip()
+            if text:
+                parts.append(f"## Page {i}\n\n{text}")
+        return "\n\n".join(parts) if parts else None
+    except ImportError:
+        logger.info(
+            "converter: pdf2image not installed — cannot OCR scanned PDF %s.  "
+            "Install with: pip install pdf2image  (also requires poppler-utils).",
+            path,
+        )
+        return None
+    except Exception as exc:
+        logger.warning("converter: PDF OCR failed for %s — %s", path, exc)
+        return None
 
 
 def _looks_binary(text: str, *, sample_size: int = 1024) -> bool:
@@ -499,6 +719,10 @@ def _convert_files(
     code_files: list[Path] = []
     excel_files: list[Path] = []
     archive_files: list[Path] = []
+    rar_files: list[Path] = []
+    pptx_like_files: list[Path] = []
+    legacy_office_files: list[Path] = []
+    ocr_image_files: list[Path] = []
     fallback_files: list[Path] = []
     llamaindex_candidates: list[Path] = []
 
@@ -516,6 +740,12 @@ def _convert_files(
             excel_files.append(f)
         elif ext in _ARCHIVE_EXTENSIONS:
             archive_files.append(f)
+        elif ext in _RAR_EXTENSIONS:
+            rar_files.append(f)
+        elif ext in _PPTX_LIKE_EXTENSIONS:
+            pptx_like_files.append(f)
+        elif ext in _LEGACY_OFFICE_EXTENSIONS:
+            legacy_office_files.append(f)
         elif ext in _PLAINTEXT_EXTENSIONS:
             plaintext_files.append(f)
         elif ext in _LLAMAINDEX_EXTENSIONS:
@@ -524,8 +754,14 @@ def _convert_files(
         elif ext in _PLAINTEXT_EXTENSIONS | _CODE_EXTENSIONS:
             # Treat unrecognised code as plain text when include_code is False.
             plaintext_files.append(f)
-        elif ext in _SKIP_EXTENSIONS or ext in _IMAGE_EXTENSIONS:
-            logger.debug("converter: skipping binary/media file %s", f.name)
+        elif ext in _SKIP_EXTENSIONS:
+            logger.debug("converter: skipping unsupported file %s", f.name)
+        elif ext in _IMAGE_EXTENSIONS:
+            # Images: OCR if available, otherwise skip.
+            if _HAS_OCR and ext in {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".webp"}:
+                ocr_image_files.append(f)
+            else:
+                logger.debug("converter: skipping media file %s", f.name)
         else:
             # Unknown extension — try reading as plain text.
             fallback_files.append(f)
@@ -570,15 +806,20 @@ def _convert_files(
         key = str(f.resolve())
         text = llamaindex_results.get(key, "")
         if not text or not text.strip():
-            logger.debug("converter: LlamaIndex produced no text for %s — skipping", f.name)
-            continue
+            # For PDFs with no extracted text, try OCR (scanned/image-based PDFs).
+            if f.suffix.lower() == ".pdf" and _HAS_OCR:
+                logger.debug("converter: LlamaIndex got no text from %s — trying OCR fallback", f.name)
+                text = _read_pdf_with_ocr(f) or ""
+            if not text or not text.strip():
+                logger.debug("converter: LlamaIndex produced no text for %s — skipping", f.name)
+                continue
         results.append(
             _write_output(f, text, output_dir, max_chars, force=force)
         )
 
     # Phase 2: plain text files (no deps needed).
     if plaintext_files:
-        logger.info("converter: phase 2/7 — plain text  (%d files)", len(plaintext_files))
+        logger.info("converter: phase 2/10 — plain text  (%d files)", len(plaintext_files))
     for f in plaintext_files:
         _tick(f)
         text = _read_plaintext(f)
@@ -590,7 +831,7 @@ def _convert_files(
 
     # Phase 3: MOBI files.
     if mobi_files:
-        logger.info("converter: phase 3/7 — MOBI  (%d files)", len(mobi_files))
+        logger.info("converter: phase 3/10 — MOBI  (%d files)", len(mobi_files))
     for f in mobi_files:
         _tick(f)
         text = _read_mobi(f)
@@ -602,7 +843,7 @@ def _convert_files(
 
     # Phase 4: Excel files.
     if excel_files:
-        logger.info("converter: phase 4/7 — Excel  (%d files)", len(excel_files))
+        logger.info("converter: phase 4/10 — Excel  (%d files)", len(excel_files))
     for f in excel_files:
         _tick(f)
         text = _read_excel(f, max_chars=max_chars)
@@ -614,15 +855,45 @@ def _convert_files(
 
     # Phase 5: ZIP archives (recursive extraction).
     if archive_files:
-        logger.info("converter: phase 5/7 — ZIP archives  (%d files)", len(archive_files))
+        logger.info("converter: phase 5/10 — ZIP archives  (%d files)", len(archive_files))
     for f in archive_files:
         _tick(f)
         extracted = _extract_zip(f, output_dir, max_chars, include_code=include_code, force=force)
         results.extend(extracted)
 
-    # Phase 6: source code (when requested).
+    # Phase 6: RAR archives (optional dep: rarfile).
+    if rar_files:
+        logger.info("converter: phase 6/10 — RAR archives  (%d files)", len(rar_files))
+    for f in rar_files:
+        _tick(f)
+        extracted = _extract_rar(f, output_dir, max_chars, include_code=include_code, force=force)
+        results.extend(extracted)
+
+    # Phase 7: OOXML PowerPoint-family files (.ppsx, .pptm) via python-pptx.
+    if pptx_like_files:
+        logger.info("converter: phase 7/10 — PPTX-like  (%d files)", len(pptx_like_files))
+    for f in pptx_like_files:
+        _tick(f)
+        text = _read_pptx_like(f)
+        if text and text.strip():
+            results.append(
+                _write_output(f, text, output_dir, max_chars, fmt="pptx", force=force)
+            )
+
+    # Phase 8: legacy binary Office files (.doc, .ppt, .pps) via LibreOffice.
+    if legacy_office_files:
+        logger.info("converter: phase 8/10 — legacy Office via LibreOffice  (%d files)", len(legacy_office_files))
+    for f in legacy_office_files:
+        _tick(f)
+        text = _read_via_libreoffice(f)
+        if text and text.strip():
+            results.append(
+                _write_output(f, text, output_dir, max_chars, fmt=f.suffix.lstrip("."), force=force)
+            )
+
+    # Phase 9: source code (when requested).
     if code_files and include_code:
-        logger.info("converter: phase 6/7 — source code  (%d files)", len(code_files))
+        logger.info("converter: phase 9/10 — source code  (%d files)", len(code_files))
         try:
             from .code_analyzer import analyze_code_files
             for f in code_files:
@@ -645,9 +916,20 @@ def _convert_files(
                         _write_output(f, text, output_dir, max_chars, fmt="code", force=force)
                     )
 
-    # Phase 7: unknown extensions — try reading as plain text.
+    # Phase 9b: OCR images (.gif, .bmp, .jpg, etc.) when pytesseract is available.
+    if ocr_image_files:
+        logger.info("converter: phase 9b/10 — OCR images  (%d files)", len(ocr_image_files))
+    for f in ocr_image_files:
+        _tick(f)
+        text = _read_ocr_image(f)
+        if text and text.strip():
+            results.append(
+                _write_output(f, text, output_dir, max_chars, fmt="ocr", force=force)
+            )
+
+    # Phase 10: unknown extensions — try reading as plain text.
     if fallback_files:
-        logger.info("converter: phase 7/7 — fallback plain-text  (%d files)", len(fallback_files))
+        logger.info("converter: phase 10/10 — fallback plain-text  (%d files)", len(fallback_files))
     for f in fallback_files:
         _tick(f)
         text = _read_plaintext(f)
