@@ -136,6 +136,40 @@ Expected output when working: `CUDA: True | NVIDIA GeForce ...`
 **If you do not have an NVIDIA GPU** the CPU warning is expected and harmless —
 transcription will be slow but correct.
 
+### 4.8 `Pipeline error: File is not a zip file` in `extract_graph_nlp`
+
+This error means one or more NLTK data packages have a corrupted or incomplete
+download — the `.zip` file was fetched but not unpacked correctly.
+
+**Why it happens**: NLTK downloads packages as zip files and deletes them after
+unzipping. Leftover `.zip` files indicate a failed download. Subsequent runs try
+to load the already-present (corrupt) zip instead of re-downloading.
+
+**How to fix**:
+
+1. Remove all leftover NLTK zip files:
+
+```powershell
+Get-ChildItem "$env:APPDATA\nltk_data" -Recurse -Filter "*.zip" |
+  ForEach-Object { Remove-Item $_.FullName -Force; Write-Host "Removed: $($_.FullName)" }
+```
+
+2. Re-download all packages the NLP pipeline needs:
+
+```powershell
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\python.exe" -c @"
+import nltk
+for pkg in ['punkt','punkt_tab','averaged_perceptron_tagger','averaged_perceptron_tagger_eng','maxent_ne_chunker','maxent_ne_chunker_tab','words','stopwords','brown']:
+    result = nltk.download(pkg)
+    print(f'  {pkg}: {"OK" if result else "already present"}')
+print('Done.')
+"@
+```
+
+`run_mainstream_fast.ps1` already runs this pre-flight automatically before
+every index run, so manual recovery is only needed when running `graphrag index`
+directly.
+
 ### 4.7 `Starting workflow: load_input_documents` — no progress for 10–30+ minutes
 
 This is **expected** for large corpora.  The `load_input_documents` workflow reads

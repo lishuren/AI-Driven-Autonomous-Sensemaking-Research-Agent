@@ -372,10 +372,16 @@ function Invoke-IndexStep {
         $ShardStatus = Get-Content $ShardStatusFile -Raw | ConvertFrom-Json -AsHashtable
         Log "Found prior completion marker; re-running index with preserved input/cache"
     }
-    # Ensure NLTK punkt_tab is present before the NLP pipeline runs (a corrupted
-    # or missing download causes a silent "File is not a zip file" crash).
-    Log "Ensuring NLTK punkt_tab tokenizer is available..."
-    & $PythonExe -c "import nltk; nltk.download('punkt_tab', quiet=True); nltk.download('averaged_perceptron_tagger_eng', quiet=True)" 2>&1 | Out-Null
+    # Ensure all NLTK packages the NLP pipeline needs are present.
+    # A corrupted/partial download leaves a .zip file behind and causes a
+    # silent "File is not a zip file" crash in extract_graph_nlp.
+    # Run 'graphragloader\check_status.ps1' section 4.8 if this still fails.
+    Log "Ensuring NLTK data packages are available..."
+    & $PythonExe -c @"
+import nltk
+for pkg in ['punkt','punkt_tab','averaged_perceptron_tagger','averaged_perceptron_tagger_eng','maxent_ne_chunker','maxent_ne_chunker_tab','words','stopwords','brown']:
+    nltk.download(pkg, quiet=True)
+"@ 2>&1 | Out-Null
 
     $IndexArgs = @("index", "--root", $Target, "--method", $GraphMethod)
     Log "Running GraphRAG index (fast)..."
