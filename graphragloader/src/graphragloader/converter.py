@@ -489,7 +489,7 @@ def _convert_files(
             pct = round(100.0 * n / _progress_total, 1)
             logger.info(
                 "converter: %d / %d files (%.1f%%)  current: %s",
-                n, _progress_total, pct, current.name,
+                n, _progress_total, pct, current,
             )
 
     # Partition files by handling strategy.
