@@ -56,7 +56,7 @@ For a native PowerShell runtime check on Windows, run:
 ## Helper Scripts
 
 - `check_status.sh` — inspect a GraphRAG target directory and show whether a matching indexing process is currently running
-- `check_status.ps1` — PowerShell version of the status helper for Windows terminals
+- `check_status.ps1` — PowerShell version of the status helper for Windows terminals. Always shows a deduplicated **Running GraphRAG jobs** summary at the bottom, listing every active `graphrag index`, `graphragloader convert`, or `graphragloader query` job across all targets (not just the one being checked). The `Status` field reflects only the specified target.
 
 ## Optional Dependencies
 

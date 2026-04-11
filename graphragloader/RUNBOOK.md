@@ -221,7 +221,37 @@ the current `input/`, `output/`, `settings.yaml`, and `.graphragloader_state.jso
 state for the target directory.
 
 `check_status.ps1` prints the same status summary for Windows PowerShell and
-PowerShell 7 terminals.
+PowerShell 7 terminals. It also always prints a **Running GraphRAG jobs** section
+at the bottom that lists every active `graphrag` or `graphragloader` process on
+the machine — across all targets, not just the one you queried. Multiple OS-level
+processes for the same job (launcher + python interpreter) are deduplicated into a
+single summary line. The `Status:` field at the top reflects only the target you
+passed.
+
+Example output when two jobs are running simultaneously:
+
+```
+GraphRAG Status
+===============
+Target:            D:\mainstreamGraphRAG
+Status:            RUNNING
+Settings present:  yes
+State file:        no
+Input files:       88833
+Output files:      4
+Latest output:     D:\mainstreamGraphRAG\output\stats.json
+
+Running GraphRAG jobs:
+----------------------
+  [INDEX]  D:\mainstreamGraphRAG  (method=fast)
+  [CONVERT]  D:\FinanceRAG  <-- D:\Finance
+```
+
+Run without arguments to see the global job list without targeting any project:
+
+```powershell
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\graphragloader\check_status.ps1"
+```
 
 ## 6. Quick Health Checks
 

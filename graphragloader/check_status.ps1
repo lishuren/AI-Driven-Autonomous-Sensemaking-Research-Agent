@@ -32,7 +32,9 @@ function Resolve-TargetPath {
 }
 
 function Get-GraphRAGProcesses {
-    $pattern = 'graphragloader|python(?:\.exe)?\s+.*-m\s+graphrag\s+index|graphrag(?:\.exe)?\s+index'
+    # Match any process whose command line contains a graphrag or graphragloader invocation.
+    # Use a loose pattern to handle quoted executables, e.g. "graphrag.exe" index ...
+    $pattern = 'graphragloader|graphrag(?:\.exe)?["\s].*?\b(?:index|convert|query|init|update)\b'
 
     Get-CimInstance Win32_Process |
         Where-Object { $_.CommandLine -and $_.CommandLine -match $pattern } |
@@ -72,20 +74,42 @@ function Get-MatchPatterns {
     return $patterns | Where-Object { $_ } | Select-Object -Unique
 }
 
+function Parse-GraphRAGArgs {
+    param([string]$CommandLine)
+
+    $result = [pscustomobject]@{ Operation = ''; Root = ''; Source = ''; Target = ''; Method = '' }
+
+    if ($CommandLine -match '(?:graphrag|graphragloader)(?:loader)?(?:\.exe)?\b[^|&]*?\b(index|convert|query|init|update)\b') {
+        $result.Operation = $Matches[1]
+    }
+
+    foreach ($entry in @(
+        @{ Prop = 'Root';   Flag = '--root'   },
+        @{ Prop = 'Source'; Flag = '--source' },
+        @{ Prop = 'Target'; Flag = '--target' },
+        @{ Prop = 'Method'; Flag = '--method' }
+    )) {
+        $flag = $entry.Flag
+        if ($CommandLine -match "$flag\s+(?:\""([^\""]+)\""|([^\s]+))") {
+            $result.$($entry.Prop) = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+        }
+    }
+
+    return $result
+}
+
 function Get-FilteredProcesses {
     param(
         [object[]]$Processes,
-        [string[]]$Patterns
+        [string]$ResolvedTarget
     )
 
+    $normalTarget = $ResolvedTarget.TrimEnd([char]'\', [char]'/')
+
     $Processes | Where-Object {
-        $commandLine = $_.CommandLine
-        foreach ($pattern in $Patterns) {
-            if ($commandLine.IndexOf($pattern, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                return $true
-            }
-        }
-        return $false
+        $a = Parse-GraphRAGArgs -CommandLine $_.CommandLine
+        $processRoot = if ($a.Root) { $a.Root } elseif ($a.Target) { $a.Target } else { '' }
+        return $processRoot.TrimEnd([char]'\', [char]'/') -ieq $normalTarget
     }
 }
 
@@ -122,8 +146,7 @@ $stateFile = Join-Path $resolvedTarget ".graphragloader_state.json"
 $settingsFile = Join-Path $resolvedTarget "settings.yaml"
 
 $allProcesses = @(Get-GraphRAGProcesses)
-$matchPatterns = @(Get-MatchPatterns -ResolvedPath $resolvedTarget -RawPath $TargetDir)
-$matchingProcesses = @(Get-FilteredProcesses -Processes $allProcesses -Patterns $matchPatterns)
+$matchingProcesses = @(Get-FilteredProcesses -Processes $allProcesses -ResolvedTarget $resolvedTarget)
 
 $inputCount = Get-FileCount -Path $inputDir
 $outputCount = Get-FileCount -Path $outputDir
@@ -171,16 +194,27 @@ if (Test-Path -LiteralPath $progressFile -PathType Leaf) {
 }
 
 Write-Host ""
-if ($matchingProcesses.Count -gt 0) {
-    Write-Host "Active processes for this target:"
-    $matchingProcesses | ForEach-Object {
-        Write-Host ("{0} {1}" -f $_.ProcessId, $_.CommandLine)
-    }
-} elseif ($allProcesses.Count -gt 0) {
-    Write-Host "Active GraphRAG processes (other targets or unspecified target path):"
-    $allProcesses | ForEach-Object {
-        Write-Host ("{0} {1}" -f $_.ProcessId, $_.CommandLine)
+if ($allProcesses.Count -gt 0) {
+    Write-Host "Running GraphRAG jobs:"
+    Write-Host "----------------------"
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $normalizedResolvedTarget = $resolvedTarget.TrimEnd([char]'\', [char]'/')
+    foreach ($proc in $allProcesses) {
+        $a = Parse-GraphRAGArgs -CommandLine $proc.CommandLine
+        $jobRoot = if ($a.Root) { $a.Root } elseif ($a.Target) { $a.Target } else { '' }
+        $jobKey  = "$($a.Operation)|$jobRoot|$($a.Method)"
+        if (-not $seen.Add($jobKey)) { continue }  # deduplicate (launcher + python PIDs per job)
+
+        $label = if ($a.Operation) { $a.Operation.ToUpper() } else { 'GRAPHRAG' }
+        $isCurrentTarget = $jobRoot.TrimEnd([char]'\', [char]'/') -ieq $normalizedResolvedTarget
+        $color = if ($isCurrentTarget) { 'Green' } else { 'Cyan' }
+
+        $line = "  [$label]"
+        if ($jobRoot)  { $line += "  $jobRoot" }
+        if ($a.Method) { $line += "  (method=$($a.Method))" }
+        if ($a.Source) { $line += "  <-- $($a.Source)" }
+        Write-Host $line -ForegroundColor $color
     }
 } else {
-    Write-Host "Active GraphRAG processes: none"
+    Write-Host "Running GraphRAG jobs: none"
 }
