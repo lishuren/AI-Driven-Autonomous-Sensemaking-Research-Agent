@@ -374,12 +374,16 @@ def _read_via_libreoffice(path: Path) -> Optional[str]:
     try:
         result = subprocess.run(
             [soffice, "--headless", "--convert-to", "txt:Text", "--outdir", str(tmpdir), str(path)],
-            capture_output=True, text=True, timeout=120,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=120,
         )
+        stderr_msg = result.stderr.decode(errors="replace").strip() if result.stderr else ""
+        stdout_msg = result.stdout.decode(errors="replace").strip() if result.stdout else ""
         if result.returncode != 0:
             logger.warning(
                 "converter: LibreOffice failed for %s — %s",
-                path, result.stderr.strip() or result.stdout.strip(),
+                path, stderr_msg or stdout_msg,
             )
             return None
         out_file = tmpdir / (path.stem + ".txt")
@@ -529,6 +533,36 @@ def _build_metadata_header(path: Path) -> str:
     )
 
 
+def _use_llamaindex_one(path: Path) -> str:
+    """Use LlamaIndex to read a single file.  Returns extracted text or empty string.
+
+    Processes one file at a time so the loaded Documents are eligible for GC
+    immediately after this call, keeping peak memory proportional to a single
+    file rather than the entire batch.
+    """
+    try:
+        from llama_index.core import SimpleDirectoryReader
+    except ImportError:
+        return ""
+
+    try:
+        reader = SimpleDirectoryReader(
+            input_files=[str(path)],
+            errors="ignore",
+        )
+        documents = reader.load_data()
+    except Exception as exc:
+        logger.warning("converter: LlamaIndex load failed for %s — %s", path.name, exc)
+        return ""
+
+    parts: list[str] = []
+    for doc in documents:
+        text = doc.text or ""
+        if text.strip():
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
 def _use_llamaindex(source_dir: Path, extensions: set[str], *, files: Optional[list[Path]] = None) -> dict[str, str]:
     """Use LlamaIndex to read files matching *extensions* from *source_dir*.
 
@@ -536,6 +570,9 @@ def _use_llamaindex(source_dir: Path, extensions: set[str], *, files: Optional[l
     mode).  Otherwise the full *source_dir* is scanned recursively.
 
     Returns a mapping of ``{resolved_path_str: extracted_text}``.
+
+    Note: The incremental path (``files`` provided) should be avoided for large
+    batches — prefer iterating with ``_use_llamaindex_one`` to bound peak memory.
     """
     try:
         from llama_index.core import SimpleDirectoryReader
@@ -552,19 +589,12 @@ def _use_llamaindex(source_dir: Path, extensions: set[str], *, files: Optional[l
         return {}
 
     try:
-        if files:
-            # Load only the specific files that need (re-)processing.
-            reader = SimpleDirectoryReader(
-                input_files=[str(f) for f in files],
-                errors="ignore",
-            )
-        else:
-            reader = SimpleDirectoryReader(
-                input_dir=str(source_dir),
-                recursive=True,
-                required_exts=target_exts,
-                errors="ignore",
-            )
+        reader = SimpleDirectoryReader(
+            input_dir=str(source_dir),
+            recursive=True,
+            required_exts=target_exts,
+            errors="ignore",
+        )
         documents = reader.load_data()
     except Exception as exc:
         logger.warning("converter: LlamaIndex load failed — %s", exc)
@@ -796,15 +826,14 @@ def _convert_files(
             "converter: phase 1/10 — LlamaIndex  (%d files: %s)  [this may take several minutes]",
             len(lli_need), ", ".join(sorted(llamaindex_exts)),
         )
-    llamaindex_results = _use_llamaindex(source_dir, llamaindex_exts, files=lli_need) if lli_need else {}
-    if lli_need:
-        logger.info("converter: phase 1/10 — LlamaIndex done (%d results)", len(llamaindex_results))
-
-    # Write LlamaIndex results.
+    # Phase 1: LlamaIndex for rich formats — process one file at a time so peak
+    # memory is proportional to a single document, not the entire batch.
+    # (Loading hundreds of large PDFs at once via SimpleDirectoryReader.load_data()
+    # exhausts RAM and causes MemoryError in background reader threads on Windows.)
+    _lli_written = 0
     for f in lli_need:
         _tick(f)
-        key = str(f.resolve())
-        text = llamaindex_results.get(key, "")
+        text = _use_llamaindex_one(f)
         if not text or not text.strip():
             # For PDFs with no extracted text, try OCR (scanned/image-based PDFs).
             if f.suffix.lower() == ".pdf" and _HAS_OCR:
@@ -816,6 +845,9 @@ def _convert_files(
         results.append(
             _write_output(f, text, output_dir, max_chars, force=force)
         )
+        _lli_written += 1
+    if lli_need:
+        logger.info("converter: phase 1/10 — LlamaIndex done (%d results)", _lli_written)
 
     # Phase 2: plain text files (no deps needed).
     if plaintext_files:
