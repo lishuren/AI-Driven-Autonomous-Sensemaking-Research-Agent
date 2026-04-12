@@ -110,9 +110,10 @@ class ParquetTable(Table):
             else:
                 self._df = pd.DataFrame()
 
-        for _, row in self._df.iterrows():
-            row_dict = cast("dict[str, Any]", row.to_dict())
-            yield _apply_transformer(self._transformer, row_dict)
+        # to_dict('records') is ~50-100x faster than iterrows() for large
+        # DataFrames because it avoids creating a pandas Series per row.
+        for row_dict in self._df.to_dict("records"):
+            yield _apply_transformer(self._transformer, cast("dict[str, Any]", row_dict))
 
     async def length(self) -> int:
         """Return the number of rows in the table.

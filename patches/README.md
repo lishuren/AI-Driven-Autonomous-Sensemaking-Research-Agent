@@ -56,6 +56,93 @@ Write-Host "Patch applied."
 
 ---
 
+## graphrag_storage — `iterrows()` performance fix
+
+**Bug**: `ParquetTable._aiter_impl()` iterated rows via `pd.DataFrame.iterrows()`,
+which creates a full `pd.Series` object per row (~50-100x slower than dict-based
+iteration).  On corpora with 9.5M relationship rows this caused `finalize_graph`
+to hang for hours (observed: >6 hours without completing).
+
+**Affected package/version**: `graphrag-storage==3.0.8`
+
+**Fixed file** (relative to venv `Lib/site-packages/`):
+
+| Repo path | Venv path |
+|-----------|-----------|
+| `patches/graphrag_storage/parquet_table.py` | `graphrag_storage/tables/parquet_table.py` |
+
+**Change summary**: In `_aiter_impl`, replaced:
+
+```python
+for _, row in self._df.iterrows():
+    yield _apply_transformer(...)
+```
+
+with:
+
+```python
+for row_dict in self._df.to_dict("records"):
+    yield _apply_transformer(...)
+```
+
+The patch file in `patches/graphrag_storage/parquet_table.py` includes **both**
+the PyArrow fix and this performance fix.
+
+---
+
+## graphrag — `finalize_graph` vectorized rewrite
+
+**Bug**: `graphrag.index.workflows.finalize_graph` performed three sequential
+full passes over 9.5M rows using `async for row in table:` (which internally
+calls `_aiter_impl`):
+1. `_build_degree_map()` — full scan to build a `Counter`
+2. `finalize_entities()` — full scan to assign IDs and degrees
+3. `finalize_relationships()` — full scan to assign IDs and combined degrees
+
+Each pass was O(n) Python-loop overhead.  At 9.5M rows × 3 passes the workflow
+never completed within a practical timeframe.
+
+**Affected package/version**: `graphrag==3.0.8`
+
+**Fixed file** (relative to venv `Lib/site-packages/`):
+
+| Repo path | Venv path |
+|-----------|-----------|
+| `patches/graphrag/index/workflows/finalize_graph.py` | `graphrag/index/workflows/finalize_graph.py` |
+
+**Change summary**: Replaced the three-pass streaming implementation with a
+single `_finalize_vectorized()` function that:
+- Loads both DataFrames once via `read_dataframe()` (bulk columnar read)
+- Builds the degree map with NumPy vectorized `np.where` + `value_counts()`
+- Deduplicates and assigns IDs with `drop_duplicates()` + `reset_index()`
+- Completes `finalize_graph` in seconds instead of hours
+
+### Reapply after venv rebuild
+
+```powershell
+$venv = "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv"
+$pkgSt  = "$venv\Lib\site-packages\graphrag_storage\tables"
+$pkgGr  = "$venv\Lib\site-packages\graphrag\index\workflows"
+$here   = $PSScriptRoot
+
+# graphrag_storage patches (PyArrow + iterrows fixes)
+Copy-Item "$here\graphrag_storage\parquet_table_provider.py" "$pkgSt\parquet_table_provider.py" -Force
+Copy-Item "$here\graphrag_storage\parquet_table.py"          "$pkgSt\parquet_table.py"          -Force
+
+# graphrag finalize_graph vectorized rewrite
+New-Item -ItemType Directory -Force -Path "$pkgGr" | Out-Null
+Copy-Item "$here\graphrag\index\workflows\finalize_graph.py" "$pkgGr\finalize_graph.py" -Force
+
+# Clear bytecode cache
+Remove-Item "$pkgSt\__pycache__\parquet_table_provider.cpython-*.pyc" -ErrorAction SilentlyContinue
+Remove-Item "$pkgSt\__pycache__\parquet_table.cpython-*.pyc"          -ErrorAction SilentlyContinue
+Remove-Item "$pkgGr\__pycache__\finalize_graph.cpython-*.pyc"         -ErrorAction SilentlyContinue
+
+Write-Host "All patches applied."
+```
+
+---
+
 ## Development Environment — Windows / VPN
 
 ### `Failed to connect to github.com port 443` (Windows + VPN)
