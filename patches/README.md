@@ -53,3 +53,49 @@ Remove-Item "$pkg\__pycache__\parquet_table.cpython-*.pyc"          -ErrorAction
 
 Write-Host "Patch applied."
 ```
+
+---
+
+## Development Environment — Windows / VPN
+
+### `Failed to connect to github.com port 443` (Windows + VPN)
+
+Symptom: `git push` / `git pull` fails with:
+
+```
+fatal: unable to access 'https://github.com/...': Failed to connect to github.com port 443
+```
+
+This typically happens on Windows 10/11 when a VPN is active.  Two independent
+causes are common; try them in order.
+
+#### 1 — Stale proxy settings
+
+Git may be caching a proxy that was set for a previous network environment and
+is no longer reachable through the VPN.
+
+```powershell
+git config --global --unset http.proxy
+git config --global --unset https.proxy
+```
+
+Verify no proxy remains:
+
+```powershell
+git config --global --list | Select-String proxy
+```
+
+#### 2 — DNS not resolving `github.com` through the VPN
+
+The VPN tunnel sometimes leaves DNS in a broken state.  From an **elevated**
+Command Prompt or PowerShell:
+
+```cmd
+ipconfig /flushdns
+netsh winsock reset
+```
+
+Restart the PC after running both commands so network adapters re-initialise
+cleanly.  If the VPN client has a "Reconnect" button, use that first before
+rebooting.
+
