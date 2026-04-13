@@ -55,6 +55,7 @@ $Source     = "D:\Mainstream"
 $Target     = "D:\mainstreamGraphRAG"
 $ReportsDir = Join-Path $Target "reports"
 $LogFile    = Join-Path $Target "run_mainstream_fast.log"   # separate log — does not clobber standard log
+$ConvertDoneFile = Join-Path $Target ".convert_done.json"   # written after a successful convert; auto-skips re-convert on restart
 
 # ── FAST-MODE SETTINGS ───────────────────────────────────────────────────────
 $Provider       = "ollama"
@@ -366,6 +367,9 @@ function Invoke-ConvertStep {
     )
     & $LoaderExe @ConvertArgs
     if ($LASTEXITCODE -ne 0) { throw "Convert failed with exit code $LASTEXITCODE" }
+    # Write a completion marker so restarts automatically skip convert.
+    @{ completed = $true; timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss"); source = $Source; max_chars = $ConvertMaxChars } |
+        ConvertTo-Json | Set-Content $ConvertDoneFile -Encoding UTF8
     Log "Convert complete."
 }
 
@@ -520,6 +524,9 @@ Initialize-Settings
 
 if ($SkipConvert) {
     Log "Skipping convert (-SkipConvert flag set)"
+} elseif (Test-Path $ConvertDoneFile) {
+    $Done = Get-Content $ConvertDoneFile -Raw | ConvertFrom-Json
+    Log "Skipping convert — already completed at $($Done.timestamp) (delete $ConvertDoneFile to force re-convert)"
 } else {
     Invoke-ConvertStep
 }

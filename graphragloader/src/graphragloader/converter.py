@@ -884,6 +884,13 @@ def _convert_files(
         logger.info("converter: phase 2/10 — plain text  (%d files)", len(plaintext_files))
     for f in plaintext_files:
         _tick(f)
+        if not force and _is_up_to_date(f, output_dir):
+            results.append(ConvertedDocument(
+                source_path=str(f.resolve()), target_path=str((output_dir / _stable_filename(f)).resolve()),
+                title=f.name, char_count=0, format=f.suffix.lstrip(".") or "txt",
+                metadata={"size_bytes": f.stat().st_size, "skipped": True},
+            ))
+            continue
         text = _read_plaintext(f)
         if not text or not text.strip():
             continue
@@ -896,6 +903,13 @@ def _convert_files(
         logger.info("converter: phase 3/10 — MOBI  (%d files)", len(mobi_files))
     for f in mobi_files:
         _tick(f)
+        if not force and _is_up_to_date(f, output_dir):
+            results.append(ConvertedDocument(
+                source_path=str(f.resolve()), target_path=str((output_dir / _stable_filename(f)).resolve()),
+                title=f.name, char_count=0, format="mobi",
+                metadata={"size_bytes": f.stat().st_size, "skipped": True},
+            ))
+            continue
         text = _read_mobi(f)
         if not text or not text.strip():
             continue
@@ -908,6 +922,13 @@ def _convert_files(
         logger.info("converter: phase 4/10 — Excel  (%d files)", len(excel_files))
     for f in excel_files:
         _tick(f)
+        if not force and _is_up_to_date(f, output_dir):
+            results.append(ConvertedDocument(
+                source_path=str(f.resolve()), target_path=str((output_dir / _stable_filename(f)).resolve()),
+                title=f.name, char_count=0, format="excel",
+                metadata={"size_bytes": f.stat().st_size, "skipped": True},
+            ))
+            continue
         text = _read_excel(f, max_chars=max_chars)
         if not text or not text.strip():
             continue
@@ -936,6 +957,13 @@ def _convert_files(
         logger.info("converter: phase 7/10 — PPTX-like  (%d files)", len(pptx_like_files))
     for f in pptx_like_files:
         _tick(f)
+        if not force and _is_up_to_date(f, output_dir):
+            results.append(ConvertedDocument(
+                source_path=str(f.resolve()), target_path=str((output_dir / _stable_filename(f)).resolve()),
+                title=f.name, char_count=0, format="pptx",
+                metadata={"size_bytes": f.stat().st_size, "skipped": True},
+            ))
+            continue
         text = _read_pptx_like(f)
         if text and text.strip():
             results.append(
@@ -947,6 +975,13 @@ def _convert_files(
         logger.info("converter: phase 8/10 — legacy Office via LibreOffice  (%d files)", len(legacy_office_files))
     for f in legacy_office_files:
         _tick(f)
+        if not force and _is_up_to_date(f, output_dir):
+            results.append(ConvertedDocument(
+                source_path=str(f.resolve()), target_path=str((output_dir / _stable_filename(f)).resolve()),
+                title=f.name, char_count=0, format=f.suffix.lstrip("."),
+                metadata={"size_bytes": f.stat().st_size, "skipped": True},
+            ))
+            continue
         text = _read_via_libreoffice(f)
         if text and text.strip():
             results.append(
@@ -960,6 +995,16 @@ def _convert_files(
             from .code_analyzer import analyze_code_files
             for f in code_files:
                 _tick(f)
+                # Pre-filter: skip code analysis when output is already current.
+                # analyze_code_files() is CPU-intensive; this avoids re-processing
+                # tens of thousands of files that haven't changed since last run.
+                if not force and _is_up_to_date(f, output_dir):
+                    results.append(ConvertedDocument(
+                        source_path=str(f.resolve()), target_path=str((output_dir / _stable_filename(f)).resolve()),
+                        title=f.name, char_count=0, format="code",
+                        metadata={"size_bytes": f.stat().st_size, "skipped": True},
+                    ))
+                    continue
                 text = analyze_code_files(f)
                 if text and text.strip():
                     results.append(
@@ -972,6 +1017,13 @@ def _convert_files(
             )
             for f in code_files:
                 _tick(f)
+                if not force and _is_up_to_date(f, output_dir):
+                    results.append(ConvertedDocument(
+                        source_path=str(f.resolve()), target_path=str((output_dir / _stable_filename(f)).resolve()),
+                        title=f.name, char_count=0, format="code",
+                        metadata={"size_bytes": f.stat().st_size, "skipped": True},
+                    ))
+                    continue
                 text = _read_plaintext(f)
                 if text and text.strip():
                     results.append(
