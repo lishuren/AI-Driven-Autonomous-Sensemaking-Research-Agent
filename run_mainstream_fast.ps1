@@ -200,14 +200,19 @@ function Wait-Ollama {
 }
 
 function Wait-OllamaModel {
-    param([string]$ModelName, [int]$TimeoutSeconds = 1200, [int]$PollIntervalSeconds = 20)
+    # LLM cold-load can take several minutes for large models (e.g. Gemma4).
+    # Per-call HTTP timeout must be long enough to let a single generate call
+    # complete even when the model is paged in from disk.
+    param([string]$ModelName, [int]$TimeoutSeconds = 3600, [int]$PollIntervalSeconds = 60)
     $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     Log "Checking model readiness: $ModelName (timeout=$TimeoutSeconds s)..."
     while ((Get-Date) -lt $Deadline) {
         try {
             $Body = @{ model = $ModelName; prompt = "ping"; stream = $false; options = @{ num_predict = 1 } } | ConvertTo-Json -Depth 5
-            $Resp = Invoke-RestMethod -Uri "$OllamaBaseUrl/api/generate" -Method Post -ContentType "application/json" -Body $Body -TimeoutSec 120 -ErrorAction Stop
-            if ($null -ne $Resp -and $null -ne $Resp.response) { Log "Model ready: $ModelName"; return }
+            # Use a long per-call timeout (15 min) — large models like Gemma4
+            # can take 5-10 min to initialise on first generate.
+            $Resp = Invoke-RestMethod -Uri "$OllamaBaseUrl/api/generate" -Method Post -ContentType "application/json" -Body $Body -TimeoutSec 900 -ErrorAction Stop
+            if ($null -ne $Resp -and ($null -ne $Resp.response -or $Resp.done -eq $true)) { Log "Model ready: $ModelName"; return }
         } catch {
             if (Test-OllamaMissingModelError $_) { throw "Completion model missing: $ModelName. Run: ollama pull $ModelName" }
         }
