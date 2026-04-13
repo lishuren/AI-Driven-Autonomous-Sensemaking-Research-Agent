@@ -508,6 +508,16 @@ def _read_pdf_with_ocr(path: Path) -> Optional[str]:
             path,
         )
         return None
+    except MemoryError:
+        # pdftoppm (called by pdf2image) spawns a subprocess whose reader thread
+        # can hit MemoryError when the PDF is corrupted and produces enormous
+        # or unbounded output.  Log and skip gracefully.
+        logger.warning(
+            "converter: PDF OCR aborted for %s — MemoryError while reading "
+            "subprocess output (file may be corrupted)",
+            path,
+        )
+        return None
     except Exception as exc:
         logger.warning("converter: PDF OCR failed for %s — %s", path, exc)
         return None
@@ -533,8 +543,17 @@ def _build_metadata_header(path: Path) -> str:
     )
 
 
-def _use_llamaindex_one(path: Path) -> str:
-    """Use LlamaIndex to read a single file.  Returns extracted text or empty string.
+def _use_llamaindex_one(path: Path) -> Optional[str]:
+    """Use LlamaIndex to read a single file.
+
+    Returns
+    -------
+    str
+        Extracted text (may be empty string when the file loaded successfully
+        but contained no extractable text, e.g. an image-only PDF).
+    None
+        The file could not be loaded at all (corrupted, unreadable, etc.).
+        Callers should skip further fallback processing for such files.
 
     Processes one file at a time so the loaded Documents are eligible for GC
     immediately after this call, keeping peak memory proportional to a single
@@ -552,8 +571,11 @@ def _use_llamaindex_one(path: Path) -> str:
         )
         documents = reader.load_data()
     except Exception as exc:
+        # Return None to signal a load failure (corrupted / unreadable file).
+        # Callers must NOT attempt OCR or other fallbacks on None — the file
+        # is considered unprocessable.
         logger.warning("converter: LlamaIndex load failed for %s — %s", path.name, exc)
-        return ""
+        return None
 
     parts: list[str] = []
     for doc in documents:
@@ -834,8 +856,16 @@ def _convert_files(
     for f in lli_need:
         _tick(f)
         text = _use_llamaindex_one(f)
-        if not text or not text.strip():
-            # For PDFs with no extracted text, try OCR (scanned/image-based PDFs).
+        if text is None:
+            # LlamaIndex threw an exception — the file is corrupted or
+            # unreadable.  Do NOT attempt OCR: a broken PDF will cause
+            # downstream tools (e.g. pdftoppm) to produce enormous output
+            # that can exhaust memory in their reader threads.
+            logger.warning("converter: skipping %s — file could not be read", f.name)
+            continue
+        if not text.strip():
+            # LlamaIndex loaded the file but extracted no text.  This typically
+            # means a scanned / image-only PDF — try OCR as a fallback.
             if f.suffix.lower() == ".pdf" and _HAS_OCR:
                 logger.debug("converter: LlamaIndex got no text from %s — trying OCR fallback", f.name)
                 text = _read_pdf_with_ocr(f) or ""
