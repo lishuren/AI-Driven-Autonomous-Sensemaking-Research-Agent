@@ -340,12 +340,11 @@ def _read_pptx_like(path: Path) -> Optional[str]:
         parts: list[str] = []
         for i, slide in enumerate(prs.slides, 1):
             texts = [
-                shape.text.strip()
-                for shape in slide.shapes
-                if hasattr(shape, "text") and shape.text.strip()
+                t for shape in slide.shapes
+                if (t := getattr(shape, "text", "")) and t.strip()
             ]
             if texts:
-                parts.append(f"## Slide {i}\n\n" + "\n".join(texts))
+                parts.append(f"## Slide {i}\n\n" + "\n".join(t.strip() for t in texts))
         return "\n\n".join(parts) if parts else None
     except Exception as exc:
         logger.warning("converter: cannot read %s — %s", path, exc)
