@@ -201,27 +201,38 @@ function Wait-Ollama {
 }
 
 function Wait-OllamaModel {
-    # LLM cold-load can take several minutes for large models (e.g. Gemma4).
-    # Per-call HTTP timeout must be long enough to let a single generate call
-    # complete even when the model is paged in from disk.
+    # Triggers model loading via a background generate job, then polls /api/ps
+    # to detect when Ollama has the model in memory.  This avoids blocking on
+    # inference itself, which can exceed any timeout on CPU-heavy configs.
     param([string]$ModelName, [int]$TimeoutSeconds = 3600, [int]$PollIntervalSeconds = 60)
-    $Deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    Log "Checking model readiness: $ModelName (timeout=$TimeoutSeconds s)..."
-    while ((Get-Date) -lt $Deadline) {
-        try {
-            $Body = @{ model = $ModelName; prompt = "ping"; stream = $false; options = @{ num_predict = 1 } } | ConvertTo-Json -Depth 5
-            # Use a long per-call timeout (15 min) — large models like Gemma4
-            # can take 5-10 min to initialise on first generate.
-            $Resp = Invoke-RestMethod -Uri "$OllamaBaseUrl/api/generate" -Method Post -ContentType "application/json" -Body $Body -TimeoutSec 900 -ErrorAction Stop
-            if ($null -ne $Resp -and ($null -ne $Resp.response -or $Resp.done -eq $true)) { Log "Model ready: $ModelName"; return }
-        } catch {
-            if (Test-OllamaMissingModelError $_) { throw "Completion model missing: $ModelName. Run: ollama pull $ModelName" }
+    $PsUrl     = "$OllamaBaseUrl/api/ps"
+    $WarmupUrl = "$OllamaBaseUrl/api/generate"
+    $Deadline  = (Get-Date).AddSeconds($TimeoutSeconds)
+    Log "Warming up model: $ModelName (timeout=$TimeoutSeconds s)..."
+
+    # Fire a generate in the background to trigger Ollama to load the model.
+    # keep_alive=30m prevents it from unloading before the indexer starts.
+    $WarmupBody = @{ model = $ModelName; prompt = "hello"; stream = $false; options = @{ num_predict = 1 }; keep_alive = "30m" } | ConvertTo-Json -Depth 5
+    $WarmupJob = Start-Job -ScriptBlock {
+        param($Url, $Body)
+        try { Invoke-RestMethod -Uri $Url -Method Post -ContentType "application/json" -Body $Body -TimeoutSec 3600 -ErrorAction SilentlyContinue } catch {}
+    } -ArgumentList $WarmupUrl, $WarmupBody
+
+    try {
+        while ((Get-Date) -lt $Deadline) {
+            Start-Sleep -Seconds $PollIntervalSeconds
+            try {
+                $Ps = Invoke-RestMethod -Uri $PsUrl -Method Get -TimeoutSec 10 -ErrorAction Stop
+                $Loaded = @($Ps.models | Where-Object { $_.name -like "$ModelName*" -and $_.size -gt 0 })
+                if ($Loaded.Count -gt 0) { Log "Model loaded: $ModelName  ($([math]::Round($Loaded[0].size / 1GB, 1)) GB in memory)"; return }
+            } catch {}
+            $Rem = [int]($Deadline - (Get-Date)).TotalSeconds
+            Log "Model not loaded yet ($ModelName), retrying in $PollIntervalSeconds s... ($Rem s remaining)"
         }
-        $Rem = [int]($Deadline - (Get-Date)).TotalSeconds
-        Log "Model not ready ($ModelName), retrying in $PollIntervalSeconds s... ($Rem s remaining)"
-        Start-Sleep -Seconds $PollIntervalSeconds
+        throw "Model did not load within $TimeoutSeconds s: $ModelName"
+    } finally {
+        $WarmupJob | Stop-Job -PassThru | Remove-Job -Force -ErrorAction SilentlyContinue
     }
-    throw "Model did not become ready within $TimeoutSeconds s: $ModelName"
 }
 
 function Wait-OllamaEmbedding {
