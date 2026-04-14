@@ -390,7 +390,7 @@ function Invoke-IndexStep {
     $ShardStatus     = @{}
     if (Test-Path $ShardStatusFile) {
         $ShardStatus = Get-Content $ShardStatusFile -Raw | ConvertFrom-Json -AsHashtable
-        Log "Found prior completion marker; re-running index with preserved input/cache"
+        Log "Found prior shard status — will resume from last completed workflow checkpoint"
     }
     # Ensure all NLTK packages the NLP pipeline needs are present.
     # A corrupted/partial download leaves a .zip file behind and causes a

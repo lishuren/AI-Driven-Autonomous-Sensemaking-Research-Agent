@@ -411,7 +411,7 @@ function Invoke-IndexStep {
     $ShardStatus = @{}
     if (Test-Path $ShardStatusFile) {
         $ShardStatus = Get-Content $ShardStatusFile -Raw | ConvertFrom-Json -AsHashtable
-        Log "Found prior completion marker; re-running index with preserved input/cache"
+        Log "Found prior shard status — will resume from last completed workflow checkpoint"
     }
     $IndexArgs = @(
         "index",
