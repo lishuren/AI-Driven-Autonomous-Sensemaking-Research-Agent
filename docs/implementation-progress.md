@@ -109,12 +109,12 @@ Implemented now:
 - `.gitignore` updated with `.env` at root and `topicexample/.gitignore` for `.env` and `output/`
 - Workflow tests: all patched for offline LLM where documents are processed
 - **graphragloader companion package** (`graphragloader/`): standalone package for converting local files into a Microsoft GraphRAG index and querying it
-  - `converter.py`: LlamaIndex-based file-to-text conversion (PDF, DOCX, EPUB, PPTX, images, notebooks) with stable filenames and metadata headers
+  - `converter.py`: LlamaIndex-based file-to-text conversion (PDF, DOCX, EPUB, PPTX, images, notebooks) with stable filenames and metadata headers; PyMuPDF fallback for sparse-text PDFs; Tesseract OCR fallback for scanned PDFs with auto-detected or explicit language (`--ocr-lang`)
   - `code_analyzer.py`: Python ast + tree-sitter structural extraction for source code files
   - `settings.py`: GraphRAG settings.yaml and .env generation with Ollama and OpenAI provider support
   - `indexer.py`: async indexing wrapper with change detection (file hashes + state tracking) and CLI fallback
   - `query.py`: async local/global/drift/basic search dispatch against GraphRAG parquet output
-  - `cli.py`: `graphragloader init|convert|index|query` entry points
+  - `cli.py`: `graphragloader init|convert|index|query` entry points; `convert` supports `--ocr-lang` for explicit Tesseract language selection
 - **GraphRAG integration in sensemaking-agent**:
   - `tools/graphrag_tool.py`: `GraphRAGTool` dataclass wrapping `graphragloader.query()` with `SourceDocumentState`-compatible output
   - `config.py`: `GraphRAGConfig` dataclass and `graphrag` field on `AgentConfig`
@@ -251,3 +251,27 @@ When work continues on a later day:
 - removed EPUB and MOBI dispatch tests from `test_resource_loader.py`; all 7 remaining tests pass
 - updated `topicexample/resources/README.md`, `topicexample/README.md`, root `README.md`, `docs/implementation-progress.md`, and `docs/reuse-from-v1.md` to reflect plain-text-only boundary
 - complex format conversion remains in `graphragloader` as the correct pre-processing step before GraphRAG indexing
+
+### 2026-04-14
+
+- **PDF OCR pipeline fix in `graphragloader/converter.py`** — Chinese scanned-image PDFs (e.g. finance books) were converting to only a few hundred characters because the small promo page at the front prevented the empty-text OCR gate from firing
+  - added `_HAS_PYMUPDF` flag and optional PyMuPDF import (`fitz`)
+  - added `_read_pdf_with_pymupdf(path)` — page-by-page PyMuPDF extraction
+  - added `_pdf_text_is_sparse(text, file_size_bytes)` — heuristic: `meaningful_chars < max(500, file_size/50KB × 500)` catches scanned PDFs that have minimal embedded text
+  - rewrote LlamaIndex PDF processing loop: sparse → try PyMuPDF → still sparse → try OCR
+  - added `_detect_ocr_lang()` — queries tesseract installed languages, returns `chi_sim+eng` when available
+  - added `lang` parameter to `_read_ocr_image()` and `_read_pdf_with_ocr()`
+  - added `ocr_lang: Optional[str] = None` to `convert_resources()`, `_convert_files()`, `_extract_zip()`, and `_extract_rar()` signatures; threaded through all recursive call sites
+  - added `--ocr-lang` CLI flag to `graphragloader convert` subcommand
+  - added `pymupdf` optional dependency group to `graphragloader/pyproject.toml`
+- **OCR dependencies installed**: `pymupdf 1.27.2.2`, `pdf2image`, Poppler (via WinGet), Tesseract OCR with `chi_sim` tessdata downloaded to `$env:USERPROFILE\tessdata`
+- **Finance workflow scripts updated** (`run_finance_analysis.ps1`, `run_finance_analysis_cloud.ps1`)
+  - set `$env:TESSDATA_PREFIX = "$env:USERPROFILE\tessdata"` at startup so Tesseract finds the user-scoped tessdata folder
+  - pass `--ocr-lang chi_sim+eng` to the convert step automatically — no manual CLI invocation needed
+  - auto-resume by default: convert skipped when `.convert_done.json` exists; index skipped when `.shard_status.json` has `#completed=true`
+  - elapsed-time tracking in `.shard_status.json` (`#elapsed_min`) for speed comparison
+- **`run_finance_analysis_cloud.ps1` created** — runs the same corpus with `gemma4:31b-cloud` (Ollama-hosted cloud model) into `D:\FinanceRAG-cloud`
+  - `Confirm-OllamaModelsInstalled` skips `/api/tags` check for models with `-cloud` suffix (not downloaded locally)
+  - `Wait-OllamaModel` uses a quick test generate instead of `/api/ps` polling for cloud models
+  - auto-detects manually copied `input/` files and writes `.convert_done.json` marker to skip re-convert
+  - `Show-ResumptionGuide` prints side-by-side speed comparison when both local and cloud `.shard_status.json` files exist

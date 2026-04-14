@@ -1,30 +1,47 @@
-# GraphRAG Mainstream Analysis — Cache-Aware Restart Guide
+# GraphRAG Mainstream Analysis — Resume-by-Default Guide
+
+## Core Design Principle: Resume Is Always the Default
+
+**You should never need a flag to resume.  Just re-run the script.**
+
+Every step that was already completed is skipped automatically on every re-run.
+To start fresh you delete the relevant marker file — there is no "reset" flag.
+
+| Step | Skip condition (auto-detected) | To force a fresh start |
+|------|-------------------------------|------------------------|
+| Convert | `.convert_done.json` exists | `Remove-Item D:\mainstreamGraphRAG\.convert_done.json` |
+| Index | `.shard_status.json` has `#completed = true` | `Remove-Item D:\mainstreamGraphRAG\.shard_status.json`; `Remove-Item D:\mainstreamGraphRAG\output -Recurse` |
+| Each report | `reports\<name>.md` exists | `Remove-Item D:\mainstreamGraphRAG\reports\<name>.md` |
+
+Repeatable within-run steps that are always re-executed (each ≤2 min):
+- Model warm-up (Ollama `api/ps` poll)
+- NLTK data check
+- settings.yaml model patch
+
+These are fast enough that repeating them every run is not a problem.
 
 ## Overview
 
-The `run_mainstream_analysis.ps1` script orchestrates a three-step GraphRAG workflow for long-running jobs:
+The scripts orchestrate a three-step GraphRAG workflow for long-running jobs:
 
-1. **Convert** — Transform D:\Mainstream docs into GraphRAG input (30–40 min, one-time)
-2. **Index** — GraphRAG extract_graph, build, compute (8–10 days, most prone to interruption)
+1. **Convert** — Transform source docs into GraphRAG input (30–40 min, one-time)
+2. **Index** — GraphRAG extract_graph, build, compute (8–10 days for standard; 48–72 h for fast mode)
 3. **Reports** — Generate 5 analysis documents via LLM queries
 
-## Key Improvements
+## How Resume Works
 
-### Completion Marker Tracking
-- After index completes, status is saved to `.shard_status.json` in the target folder
-- The file records completion timestamp and acts as a run marker, not a mid-index checkpoint
-- If indexing is interrupted before completion, GraphRAG restarts the index workflow and relies on preserved cache for speed
+### Convert step
+- Writes `.convert_done.json` on completion.
+- On every subsequent run the script detects this file and skips convert.
 
-### Resume Flags
-- **`-SkipConvert`** — Skip the convert step and reuse existing input while restarting index with preserved cache
-- **`-CheckShardStatus`** — Query-only mode; shows last checkpoint without running any workflow step
-- **`-SkipIndex`** — Skip indexing, regenerate reports only (assumes index output exists)
+### Index step
+- Writes `.shard_status.json` with `"#completed": true` after a successful full index.
+- When this marker is present the index phase is skipped entirely (no model warm-up either).
+- When it is absent but `output/` has subdirectories from a previous partial run, `--resume` is automatically appended to the `graphrag index` command so GraphRAG continues from the last completed workflow.
 
-### Auto-Resume Guidance
-If index is interrupted:
-- Script preserves input and LiteLLM cache
-- On script exit, displays resumption instructions automatically
-- Clear one-liner command to re-run with cache intact
+### Report step
+- Each report writes its own `.md` file under `reports/`.
+- On re-run, any report whose `.md` already exists is skipped — only missing or deleted reports are regenerated.
 
 ## Usage Patterns
 
@@ -34,31 +51,26 @@ If index is interrupted:
 ```
 Runs: convert → index → reports (full 8–10+ days)
 
-### Interrupted by Ctrl+C During Index
+### Interrupted / Crashed — Just Re-Run
 ```powershell
-& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1" -SkipConvert
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1"
 ```
-- Skips convert (saves 30–40 min)
-- Restarts the index workflow from the beginning of Step 2
-- Input folder and cache reused
-- Previously completed LLM requests can be served from cache instead of recomputed from scratch
+No flags needed.  The script auto-detects what was completed and resumes.
 
 ### Check Status Without Running
 ```powershell
 & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1" -CheckShardStatus
 ```
-- No workflow steps execute
-- Displays last checkpoint timestamp
-- Shows resumption command
-- Exit code 0 (non-destructive)
+- No workflow steps execute.
+- Displays index completion status.
+- Exit code 0 (non-destructive).
 
-### Regenerate Reports Only (After Index Complete)
+### Regenerate a Single Report
 ```powershell
-& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1" -SkipConvert -SkipIndex
+Remove-Item "D:\mainstreamGraphRAG\reports\analysis_report.md"
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1"
 ```
-- Skips both convert and index
-- Runs only report generation (Step 3)
-- Useful if reports fail but index succeeded
+All other reports are skipped; only the deleted one is regenerated.
 
 ## Loss Boundary & Recovery
 
@@ -66,12 +78,12 @@ Runs: convert → index → reports (full 8–10+ days)
 - Extract_graph processes 30,108 total text units
 - Cache preserves completed LLM request/response pairs
 - On Ctrl+C, ~100 rows of in-flight computation is lost (worst case)
-- Subsequent restart can benefit from cache hits for prior completed rows, even though the workflow counter starts over
+- `--resume` is passed automatically on restart so GraphRAG skips already-completed workflow steps; only in-progress workflow rows are re-computed
 
 ### Cache Mechanism
 - LiteLLM stores request/response pairs in `D:\mainstreamGraphRAG\cache`
 - Ollama embedding and completion cache is automatically leveraged
-- Restart with `-SkipConvert` preserves this cache
+- Cache is always preserved across re-runs (nothing deletes it)
 - Recomputation of cached rows is near-instant (no API calls)
 
 ### Logs & Checkpoints

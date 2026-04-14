@@ -38,6 +38,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_convert.add_argument("--include-code", action="store_true", help="Analyse source code files.")
     p_convert.add_argument("--max-chars", type=int, default=200_000, help="Max chars per document.")
     p_convert.add_argument("--force", action="store_true", help="Re-convert all files even if output already exists.")
+    p_convert.add_argument(
+        "--ocr-lang", default=None,
+        help=(
+            "Tesseract language(s) for OCR fallback. "
+            "Use '+' to combine: 'chi_sim+eng' for Simplified Chinese + English. "
+            "Defaults to 'chi_sim+eng' when chi_sim is available, otherwise 'eng'."
+        ),
+    )
 
     # --- index ---
     p_index = sub.add_parser("index", help="Convert files and build GraphRAG index.")
@@ -116,6 +124,7 @@ def _cmd_convert(args: argparse.Namespace) -> int:
         include_code=args.include_code,
         max_chars=args.max_chars,
         force=args.force,
+        ocr_lang=args.ocr_lang,
     )
     converted = [r for r in results if not r.metadata.get("skipped")]
     skipped_count = len(results) - len(converted)

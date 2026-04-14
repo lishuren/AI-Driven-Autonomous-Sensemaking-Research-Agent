@@ -148,6 +148,13 @@ try:
 except ImportError:
     pass
 
+_HAS_PYMUPDF = False
+try:
+    import fitz as _fitz  # noqa: F401  (PyMuPDF)
+    _HAS_PYMUPDF = True
+except ImportError:
+    pass
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -311,6 +318,7 @@ def _extract_zip(
             max_chars=max_chars,
             include_code=include_code,
             force=force,
+            ocr_lang=ocr_lang,
             _archive_prefix=archive_path.name,
             _track_progress=False,  # top-level call owns the progress file
         )
@@ -410,6 +418,7 @@ def _extract_rar(
     *,
     include_code: bool = False,
     force: bool = False,
+    ocr_lang: Optional[str] = None,
 ) -> list[ConvertedDocument]:
     """Extract a RAR archive into a temp dir and convert its contents.
 
@@ -445,6 +454,7 @@ def _extract_rar(
             max_chars=max_chars,
             include_code=include_code,
             force=force,
+            ocr_lang=ocr_lang,
             _archive_prefix=archive_path.name,
             _track_progress=False,
         )
@@ -455,7 +465,69 @@ def _extract_rar(
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def _read_ocr_image(path: Path) -> Optional[str]:
+def _read_pdf_with_pymupdf(path: Path) -> Optional[str]:
+    """Extract text from a PDF using PyMuPDF (fitz).
+
+    Handles CJK (Chinese/Japanese/Korean) text, complex font encodings,
+    and embedded fonts far better than pypdf (used by LlamaIndex by default).
+    Install with: pip install pymupdf
+    """
+    if not _HAS_PYMUPDF:
+        logger.info(
+            "converter: pymupdf not installed — install with: pip install pymupdf",
+        )
+        return None
+    try:
+        import fitz  # noqa: WPS433
+        doc = fitz.open(str(path))
+        parts: list[str] = []
+        for page_num, page in enumerate(doc, 1):
+            text = page.get_text("text")  # type: ignore[call-arg]
+            if text and text.strip():
+                parts.append(f"## Page {page_num}\n\n{text.strip()}")
+        doc.close()
+        return "\n\n".join(parts) if parts else None
+    except Exception as exc:
+        logger.warning("converter: PyMuPDF failed for %s — %s", path, exc)
+        return None
+
+
+def _pdf_text_is_sparse(text: str, file_size_bytes: int) -> bool:
+    """Return True when extracted PDF text looks incomplete.
+
+    Heuristic: fewer than 500 meaningful characters for every 50 KB of PDF
+    data suggests the extractor missed most pages (e.g. scanned images or
+    CJK encoding that pypdf cannot decode).
+    """
+    if not text:
+        return True
+    # Strip whitespace / punctuation to count only substantive characters.
+    meaningful = sum(1 for c in text if c.strip() and c not in '\'".,;:!?-–—()[]{}|/')
+    expected_min = max(500, (file_size_bytes // 50_000) * 500)
+    return meaningful < expected_min
+
+
+def _detect_ocr_lang() -> str:
+    """Return the best available Tesseract language string for this corpus.
+
+    Prefers ``chi_sim+eng`` when Simplified Chinese data is installed.
+    Falls back to ``eng`` when only the base English pack is present.
+    """
+    if not _HAS_OCR:
+        return "eng"
+    try:
+        import pytesseract  # noqa: WPS433
+        langs = pytesseract.get_languages(config="")
+        if "chi_sim" in langs:
+            return "chi_sim+eng"
+        if "chi_tra" in langs:
+            return "chi_tra+eng"
+    except Exception:
+        pass
+    return "eng"
+
+
+def _read_ocr_image(path: Path, lang: Optional[str] = None) -> Optional[str]:
     """Extract text from an image file using Tesseract OCR.
 
     Requires the ``[ocr]`` extra: ``pip install 'graphragloader[ocr]'``.
@@ -474,14 +546,14 @@ def _read_ocr_image(path: Path) -> Optional[str]:
         from PIL import Image  # noqa: WPS433
 
         img = Image.open(str(path))
-        text = pytesseract.image_to_string(img, timeout=120)
+        text = pytesseract.image_to_string(img, lang=lang or _detect_ocr_lang(), timeout=120)
         return text.strip() or None
     except Exception as exc:
         logger.warning("converter: OCR failed for %s — %s", path, exc)
         return None
 
 
-def _read_pdf_with_ocr(path: Path) -> Optional[str]:
+def _read_pdf_with_ocr(path: Path, lang: Optional[str] = None) -> Optional[str]:
     """Render each PDF page as an image and OCR it.
 
     Used as a fallback when LlamaIndex extracts no text (scanned/image PDF).
@@ -493,10 +565,11 @@ def _read_pdf_with_ocr(path: Path) -> Optional[str]:
         import pytesseract  # noqa: WPS433
         from pdf2image import convert_from_path  # noqa: WPS433
 
+        _lang = lang or _detect_ocr_lang()
         pages = convert_from_path(str(path), dpi=150)
         parts: list[str] = []
         for i, page in enumerate(pages, 1):
-            text = pytesseract.image_to_string(page, timeout=120).strip()
+            text = pytesseract.image_to_string(page, lang=_lang, timeout=120).strip()
             if text:
                 parts.append(f"## Page {i}\n\n{text}")
         return "\n\n".join(parts) if parts else None
@@ -646,6 +719,7 @@ def convert_resources(
     include_code: bool = False,
     max_chars: int = _MAX_CONTENT_CHARS,
     force: bool = False,
+    ocr_lang: Optional[str] = None,
 ) -> list[ConvertedDocument]:
     """Convert all supported files in *source_dir* to text in ``<target_dir>/input/``.
 
@@ -681,6 +755,7 @@ def convert_resources(
         max_chars=max_chars,
         include_code=include_code,
         force=force,
+        ocr_lang=ocr_lang,
     )
     skipped = sum(1 for r in results if r.metadata.get("skipped"))
     if skipped:
@@ -704,6 +779,7 @@ def _convert_files(
     *,
     include_code: bool = False,
     force: bool = False,
+    ocr_lang: Optional[str] = None,
     _archive_prefix: Optional[str] = None,
     _track_progress: bool = True,
 ) -> list[ConvertedDocument]:
@@ -862,15 +938,38 @@ def _convert_files(
             # that can exhaust memory in their reader threads.
             logger.warning("converter: skipping %s — file could not be read", f.name)
             continue
-        if not text.strip():
-            # LlamaIndex loaded the file but extracted no text.  This typically
-            # means a scanned / image-only PDF — try OCR as a fallback.
-            if f.suffix.lower() == ".pdf" and _HAS_OCR:
-                logger.debug("converter: LlamaIndex got no text from %s — trying OCR fallback", f.name)
-                text = _read_pdf_with_ocr(f) or ""
-            if not text or not text.strip():
-                logger.debug("converter: LlamaIndex produced no text for %s — skipping", f.name)
-                continue
+
+        is_pdf = f.suffix.lower() == ".pdf"
+        file_size = f.stat().st_size
+
+        if not text.strip() or (is_pdf and _pdf_text_is_sparse(text, file_size)):
+            if is_pdf:
+                # Step 1: try PyMuPDF — much better CJK / complex-font extraction.
+                if _HAS_PYMUPDF:
+                    logger.debug(
+                        "converter: LlamaIndex text sparse for %s (%d chars) — trying PyMuPDF",
+                        f.name, len(text.strip()),
+                    )
+                    pymupdf_text = _read_pdf_with_pymupdf(f) or ""
+                    if pymupdf_text.strip() and not _pdf_text_is_sparse(pymupdf_text, file_size):
+                        logger.debug("converter: PyMuPDF recovered %d chars from %s", len(pymupdf_text), f.name)
+                        text = pymupdf_text
+                    elif len(pymupdf_text.strip()) > len(text.strip()):
+                        # PyMuPDF got at least a bit more — use it.
+                        text = pymupdf_text
+
+                # Step 2: if still sparse, fall back to OCR.
+                if _pdf_text_is_sparse(text, file_size) and _HAS_OCR:
+                    logger.debug(
+                        "converter: text still sparse for %s — trying PDF OCR fallback", f.name
+                    )
+                    ocr_text = _read_pdf_with_ocr(f, lang=ocr_lang) or ""
+                    if len(ocr_text.strip()) > len(text.strip()):
+                        text = ocr_text
+
+        if not text or not text.strip():
+            logger.debug("converter: no extractable text for %s — skipping", f.name)
+            continue
         results.append(
             _write_output(f, text, output_dir, max_chars, force=force)
         )
@@ -948,7 +1047,7 @@ def _convert_files(
         logger.info("converter: phase 6/10 — RAR archives  (%d files)", len(rar_files))
     for f in rar_files:
         _tick(f)
-        extracted = _extract_rar(f, output_dir, max_chars, include_code=include_code, force=force)
+        extracted = _extract_rar(f, output_dir, max_chars, include_code=include_code, force=force, ocr_lang=ocr_lang)
         results.extend(extracted)
 
     # Phase 7: OOXML PowerPoint-family files (.ppsx, .pptm) via python-pptx.
@@ -1034,7 +1133,7 @@ def _convert_files(
         logger.info("converter: phase 9b/10 — OCR images  (%d files)", len(ocr_image_files))
     for f in ocr_image_files:
         _tick(f)
-        text = _read_ocr_image(f)
+        text = _read_ocr_image(f, lang=ocr_lang)
         if text and text.strip():
             results.append(
                 _write_output(f, text, output_dir, max_chars, fmt="ocr", force=force)

@@ -47,12 +47,15 @@ excel = [
 rar = [
     "rarfile>=4.0",
 ]
+pymupdf = [
+    "pymupdf>=1.23",
+]
 dev = [
     "pytest>=8,<9",
     "pytest-asyncio>=0.23,<1",
 ]
 all = [
-    "graphragloader[code,ocr,mobi,excel,rar,dev]",
+    "graphragloader[code,ocr,mobi,excel,rar,pymupdf,dev]",
 ]
 
 [tool.setuptools]

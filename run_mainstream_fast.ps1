@@ -424,6 +424,11 @@ for pkg in missing:
 "@ 2>&1 | Out-Null
 
     $IndexArgs = @("index", "--root", $Target, "--method", $GraphMethod)
+    $OutputDir = Join-Path $Target "output"
+    if ((Test-Path $OutputDir) -and (Get-ChildItem $OutputDir -Directory -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        $IndexArgs += "--resume"
+        Log "Detected existing GraphRAG output artifacts — adding --resume to continue from last checkpoint"
+    }
     Log "Running GraphRAG index (fast)..."
     & $GraphRagExe @IndexArgs
     if ($LASTEXITCODE -ne 0) { throw "GraphRAG index failed with exit code $LASTEXITCODE" }
@@ -444,6 +449,10 @@ function Invoke-ReportStep {
         [string]$ResponseType = "Detailed Report"
     )
     $OutFile = Join-Path $ReportsDir ($Name + ".md")
+    if (Test-Path $OutFile) {
+        Log "Skipping report — already exists: $Name  (delete $OutFile to regenerate)"
+        return
+    }
     Log "Generating report: $Name"
     $QueryArgs = @(
         "query",
@@ -501,20 +510,33 @@ function Get-ShardStatus {
 
 function Show-ResumptionGuide {
     $Status = Get-ShardStatus
+    Write-Host ""
+    Write-Host "========== RESUMPTION GUIDE ==========" -ForegroundColor Cyan
     if ($Status) {
-        Write-Host ""
-        Write-Host "========== RESUMPTION STATUS ==========" -ForegroundColor Cyan
-        Write-Host "Last checkpoint : $($Status.'#timestamp')" -ForegroundColor Yellow
-        if ($Status.'#method') { Write-Host "Index method    : $($Status.'#method')" -ForegroundColor Gray }
-        if ($Status.'#model')  { Write-Host "Model used      : $($Status.'#model')"  -ForegroundColor Gray }
-        Write-Host ""
-        Write-Host "To resume (fast mode):" -ForegroundColor White
-        Write-Host '& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -SkipConvert' -ForegroundColor Green
-        Write-Host ""
-        Write-Host "To regenerate reports only:" -ForegroundColor White
-        Write-Host '& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -SkipConvert -SkipIndex' -ForegroundColor Cyan
-        Write-Host ""
+        Write-Host "Last index run  : $($Status.'#timestamp')" -ForegroundColor Yellow
+        if ($Status.'#method')       { Write-Host "Index method    : $($Status.'#method')"        -ForegroundColor Gray }
+        if ($Status.'#index-model')  { Write-Host "Index model     : $($Status.'#index-model')"   -ForegroundColor Gray }
+        if ($Status.'#report-model') { Write-Host "Report model    : $($Status.'#report-model')"  -ForegroundColor Gray }
+        if ($Status.'#completed') {
+            Write-Host "Index status    : COMPLETE" -ForegroundColor Green
+        } else {
+            Write-Host "Index status    : INCOMPLETE (will resume automatically on next run)" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "No prior index run detected." -ForegroundColor Gray
     }
+    Write-Host ""
+    Write-Host "RESUME BEHAVIOR (automatic — no flags needed):" -ForegroundColor White
+    Write-Host "  Convert  : skipped automatically when .convert_done.json exists"  -ForegroundColor Green
+    Write-Host "  Index    : skipped automatically when already complete; resumes from last finished workflow otherwise" -ForegroundColor Green
+    Write-Host "  Reports  : skipped individually when the .md file already exists" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "TO START FRESH (delete marker files):" -ForegroundColor White
+    Write-Host "  Re-convert : Remove-Item '$ConvertDoneFile'" -ForegroundColor Gray
+    Write-Host "  Re-index   : Remove-Item '$Target\.shard_status.json'; Remove-Item '$Target\output' -Recurse" -ForegroundColor Gray
+    Write-Host "  Re-report  : Remove-Item '$ReportsDir\<name>.md'" -ForegroundColor Gray
+    Write-Host "=============================================" -ForegroundColor DarkGray
+    Write-Host ""
 }
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -542,8 +564,16 @@ if ($SkipConvert) {
     Invoke-ConvertStep
 }
 
-if ($SkipIndex) {
-    Log "Skipping index (-SkipIndex flag set)"
+$IndexAlreadyDone = $false
+$_shardStatus = Get-ShardStatus
+if ($_shardStatus -and $_shardStatus.'#completed' -eq $true) { $IndexAlreadyDone = $true }
+
+if ($SkipIndex -or $IndexAlreadyDone) {
+    if ($IndexAlreadyDone) {
+        Log "Skipping index — already completed at $($_shardStatus.'#timestamp') (delete $Target\.shard_status.json and $Target\output to re-index)"
+    } else {
+        Log "Skipping index (-SkipIndex flag set)"
+    }
 } else {
     Wait-Ollama
     Confirm-OllamaModelsInstalled -ModelNames @($IndexModel, $EmbeddingModel)
