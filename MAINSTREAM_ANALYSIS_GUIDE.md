@@ -37,7 +37,7 @@ The scripts orchestrate a three-step GraphRAG workflow for long-running jobs:
 ### Index step
 - Writes `.shard_status.json` with `"#completed": true` after a successful full index.
 - When this marker is present the index phase is skipped entirely (no model warm-up either).
-- When it is absent but `output/` has subdirectories from a previous partial run, `--resume` is automatically appended to the `graphrag index` command so GraphRAG continues from the last completed workflow.
+- When it is absent and a previous partial run exists, GraphRAG 3.x automatically skips workflows whose output parquet files are already present in `output/` — no `--resume` flag is needed or supported.
 
 ### Report step
 - Each report writes its own `.md` file under `reports/`.
@@ -78,7 +78,7 @@ All other reports are skipped; only the deleted one is regenerated.
 - Extract_graph processes 30,108 total text units
 - Cache preserves completed LLM request/response pairs
 - On Ctrl+C, ~100 rows of in-flight computation is lost (worst case)
-- `--resume` is passed automatically on restart so GraphRAG skips already-completed workflow steps; only in-progress workflow rows are re-computed
+- GraphRAG 3.x skips already-completed workflow steps automatically based on output file presence; `--resume` is not supported in this version
 
 ### Cache Mechanism
 - LiteLLM stores request/response pairs in `D:\mainstreamGraphRAG\cache`
@@ -147,20 +147,11 @@ ollama pull gemma4:e2b
 
 ### Usage
 
-**First run (full: convert + index + reports):**
+**First run OR any restart (convert + index + reports):**
 ```powershell
 & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1"
 ```
-
-**Resume after interruption:**
-```powershell
-& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -SkipConvert
-```
-
-**Reports only (after index completes):**
-```powershell
-& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -SkipConvert -SkipIndex
-```
+> **No flags needed for re-runs.** Convert, index, and reports are each auto-skipped when already complete.
 
 **Override either model independently:**
 ```powershell
@@ -188,7 +179,7 @@ ollama pull gemma4:e2b
 ## Adding New Source Code to Analysis
 
 If you have been granted access to a new repository and want to include it in the GraphRAG index,
-follow these steps. Because convert must re-run to pick up the new files, **do not use `-SkipConvert`** for this workflow.
+follow these steps. Delete the convert marker so the script re-converts, then plain re-run with no flags:
 
 ### Step 1 — Copy or Clone the Repo into the Source Folder
 
@@ -221,9 +212,10 @@ Run convert in isolation to verify your code files appear before committing to t
 Inspect `D:\mainstreamGraphRAG\input` — each document is written as a plain-text file. Confirm your
 source files were picked up before starting the long index run.
 
-### Step 3 — Run the Full Workflow
+### Step 3 — Delete the Convert Marker and Re-Run
 
 ```powershell
+Remove-Item "D:\mainstreamGraphRAG\.convert_done.json"
 & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1"
 ```
 
@@ -262,14 +254,13 @@ Unknown extensions are tried as plain text; binary-looking content is skipped au
    & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1" -CheckShardStatus
    ```
 
-2. **Always use `-SkipConvert` after first run:**
+2. **After any crash or interruption — plain re-run, no flags:**
    ```powershell
-   # After Ctrl+C:
-   & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1" -SkipConvert
-   
-   # NOT:
-   # & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1"  # <-- This would re-run convert, slower
+   & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1"
    ```
+   Convert is auto-skipped (`.convert_done.json` exists and `input/` has files).  
+   Index is auto-skipped when already complete (`.shard_status.json` + parquet files present).  
+   Reports are auto-skipped when each `.md` file already exists.
 
 3. **Avoid deleting cache folder:**
    - Do NOT delete `D:\mainstreamGraphRAG\cache` between runs
@@ -330,13 +321,13 @@ Key tuning:
 ## Troubleshooting
 
 ### Checkpoint Lost / Restart Recomputes Everything
-**Symptom:** Restarting with `-SkipConvert` retarts extract_graph from row ~5, not from prior stopping point.
+**Symptom:** Restarting restarts extract_graph from row ~5, not from prior stopping point.
 
 **Root Cause:** Workflow checkpoints (`.shard_status.json`) differ from LLM response cache. Cache is preserved; index state is not.
 
-**Solution:** This is expected. Use cache-aware resumption:
+**Solution:** This is expected. Plain re-run — the LLM cache makes previously-seen rows near-instant:
 ```powershell
-& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1" -SkipConvert
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1"
 # Index reprocesses, but LLM cache hits make it fast
 ```
 
@@ -345,9 +336,9 @@ Key tuning:
 
 **Symptom:** Graphics crashes during convert or index, reports not attempted.
 
-**Solution:** Run report step only:
+**Solution:** Plain re-run. Convert and index are auto-skipped; only missing reports are generated:
 ```powershell
-& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1" -SkipConvert -SkipIndex
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1"
 ```
 
 ### Ollama Timeout During extract_graph
@@ -374,12 +365,12 @@ embedding_models:
 
 **Behavior:** This warning is non-fatal. LiteLLM only uses that remote file for model pricing/context metadata and automatically falls back to the packaged backup JSON. The wrapper now sets `LITELLM_LOCAL_MODEL_COST_MAP=True` so the offline/local Ollama workflow skips the remote fetch entirely.
 
-**Solution:** Pull the required models once, then rerun:
+**Solution:** Pull the required models once, then rerun normally:
 ```powershell
 ollama pull gemma4:e4b
 ollama pull nomic-embed-text
 
-& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1" -SkipConvert
+& "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1"
 ```
 
 ## Files & Paths
@@ -409,9 +400,9 @@ ollama pull nomic-embed-text
 
 2. **On interruption, resume:**
    ```powershell
-   & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1" -SkipConvert
+   & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_analysis.ps1"
    ```
-   Expected: ~100-row loss, cache-accelerated recomputation.
+   Expected: Convert and completed index workflows auto-skipped; LLM cache accelerates any reprocessing.
 
 3. **Check progress anytime:**
    ```powershell

@@ -14,20 +14,30 @@
       -ReportModel gemma4:e4b  — higher quality for final report synthesis
 
 .USAGE
-    # First run (convert + index + reports):
+    *** RE-RUN AFTER CRASH / INTERRUPTION: pass NO flags. Ever. ***
+    The script auto-detects what is already done and skips it automatically.
+
+    # Normal run — first time or any restart:
     & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1"
 
-    # Resume after interruption (reuse existing input/cache):
-    & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -SkipConvert
-
-    # Reports only (after index finishes):
-    & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -SkipConvert -SkipIndex
-
-    # Status check (no workflow steps executed):
+    # Status check only (no workflow steps executed):
     & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -CheckShardStatus
 
-    # Override either model independently:
+    # Override models (optional, not needed for re-runs):
     & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -IndexModel "gemma4:e2b" -ReportModel "gemma4:e4b"
+
+    AUTO-SKIP RULES (handled internally — you do nothing):
+      Convert : skipped when .convert_done.json exists and input/ has files
+      Index   : skipped when .shard_status.json marks it complete AND output/ has parquet files
+      Reports : skipped individually when the .md file already exists
+
+    FORCE A STEP TO RE-RUN (delete its marker, then plain re-run):
+      Re-convert : Remove-Item "D:\mainstreamGraphRAG\.convert_done.json"
+      Re-index   : Remove-Item "D:\mainstreamGraphRAG\.shard_status.json"; Remove-Item "D:\mainstreamGraphRAG\output" -Recurse
+      Re-report  : Remove-Item "D:\mainstreamGraphRAG\reports\<name>.md"
+
+    EMERGENCY SKIP FLAGS (-SkipConvert, -SkipIndex) EXIST BUT SHOULD NEVER BE NEEDED.
+    If you think you need one, delete the relevant marker instead and plain re-run.
 #>
 param(
     [switch]$SkipConvert,
@@ -56,6 +66,8 @@ $Target     = "D:\mainstreamGraphRAG"
 $ReportsDir = Join-Path $Target "reports"
 $LogFile    = Join-Path $Target "run_mainstream_fast.log"   # separate log — does not clobber standard log
 $ConvertDoneFile = Join-Path $Target ".convert_done.json"   # written after a successful convert; auto-skips re-convert on restart
+# Restarts skip convert when this file exists and input/ still has files.
+# If .convert_progress exists or input/ is empty, convert runs incrementally.
 
 # ── FAST-MODE SETTINGS ───────────────────────────────────────────────────────
 $Provider       = "ollama"
@@ -309,6 +321,43 @@ function Update-SettingsChunking {
     }
 }
 
+# Ensures the embed_text section is present in settings.yaml with a safe
+# batch_max_tokens for nomic-embed-text.
+#
+# Background: nomic-embed-text uses BERT tokenization, which produces ~2.7x
+# more tokens than the tiktoken (cl100k_base) tokenizer that GraphRAG/LiteLLM
+# uses for token counting.  The default batch_max_tokens=8191 (tiktoken units)
+# can therefore send chunks of ~22000 actual BERT tokens to Ollama, exceeding
+# nomic's hard 8192-token context limit and causing HTTP 400 errors.
+#
+# Setting batch_max_tokens=2000 (tiktoken) caps real chunk sizes at ~5400 BERT
+# tokens — comfortably within the 8192 limit while processing all data in one pass.
+function Update-SettingsEmbedText {
+    param([string]$SettingsPath)
+    if (-not (Test-Path $SettingsPath)) { return }
+
+    $Content = Get-Content -Path $SettingsPath -Raw
+    if ($Content -match '\bembed_text\s*:') {
+        # Section exists — patch batch_max_tokens if it is still the unsafe default.
+        $Updated = $false
+        $New = [regex]::Replace($Content, '(?m)^(\s+batch_max_tokens:)\s*\d+', "`${1} 2000")
+        if ($New -ne $Content) { $Content = $New; $Updated = $true }
+        $New = [regex]::Replace($Content, '(?m)^(\s+batch_size:)\s*\d+', "`${1} 8")
+        if ($New -ne $Content) { $Content = $New; $Updated = $true }
+        if ($Updated) {
+            Set-Content -Path $SettingsPath -Value $Content -Encoding UTF8 -NoNewline
+            Log "Updated settings.yaml embed_text: batch_size=8, batch_max_tokens=2000"
+        } else {
+            Log "settings.yaml embed_text already configured correctly"
+        }
+    } else {
+        # Section missing — append it.
+        $Block = "`r`n" + "embed_text:`r`n" + "  batch_size: 8`r`n" + "  batch_max_tokens: 2000`r`n"
+        Add-Content -Path $SettingsPath -Value $Block -Encoding UTF8
+        Log "Added embed_text section to settings.yaml: batch_size=8, batch_max_tokens=2000"
+    }
+}
+
 function Update-SettingsTimeouts {
     param([string]$SettingsPath)
     if (-not (Test-Path $SettingsPath)) { return }
@@ -363,6 +412,7 @@ function Initialize-Settings {
     }
     Update-SettingsTimeouts  -SettingsPath $SettingsPath
     Update-SettingsChunking  -SettingsPath $SettingsPath
+    Update-SettingsEmbedText -SettingsPath $SettingsPath
     # Ensure settings.yaml reflects the requested index model (survives re-runs).
     Update-SettingsModel     -SettingsPath $SettingsPath -ModelName $IndexModel
 }
@@ -425,9 +475,11 @@ for pkg in missing:
 
     $IndexArgs = @("index", "--root", $Target, "--method", $GraphMethod)
     $OutputDir = Join-Path $Target "output"
-    if ((Test-Path $OutputDir) -and (Get-ChildItem $OutputDir -Directory -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-        $IndexArgs += "--resume"
-        Log "Detected existing GraphRAG output artifacts — adding --resume to continue from last checkpoint"
+    if ((Test-Path $OutputDir) -and (Get-ChildItem $OutputDir -File -Filter "*.parquet" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        # GraphRAG 3.x does not support --resume. The pipeline auto-skips
+        # workflows whose output parquet files already exist in the output
+        # directory and re-runs only the ones that are missing or incomplete.
+        Log "Detected existing GraphRAG output artifacts — pipeline will auto-skip completed workflows"
     }
     Log "Running GraphRAG index (fast)..."
     & $GraphRagExe @IndexArgs
@@ -527,7 +579,7 @@ function Show-ResumptionGuide {
     }
     Write-Host ""
     Write-Host "RESUME BEHAVIOR (automatic — no flags needed):" -ForegroundColor White
-    Write-Host "  Convert  : skipped automatically when .convert_done.json exists"  -ForegroundColor Green
+    Write-Host "  Convert  : skipped when marker is valid; otherwise runs incremental convert"  -ForegroundColor Green
     Write-Host "  Index    : skipped automatically when already complete; resumes from last finished workflow otherwise" -ForegroundColor Green
     Write-Host "  Reports  : skipped individually when the .md file already exists" -ForegroundColor Green
     Write-Host ""
@@ -555,18 +607,45 @@ if ($CheckShardStatus) {
 Test-Prerequisite
 Initialize-Settings
 
+$InputDir = Join-Path $Target "input"
+$InputHasFiles = (Test-Path $InputDir) -and (Get-ChildItem $InputDir -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)
+$ConvertProgressFile = Join-Path $Target ".convert_progress"
+
 if ($SkipConvert) {
     Log "Skipping convert (-SkipConvert flag set)"
 } elseif (Test-Path $ConvertDoneFile) {
-    $Done = Get-Content $ConvertDoneFile -Raw | ConvertFrom-Json
-    Log "Skipping convert — already completed at $($Done.timestamp) (delete $ConvertDoneFile to force re-convert)"
+    # .convert_done.json takes priority over .convert_progress — completion wins.
+    if (-not $InputHasFiles) {
+        Log "Convert marker exists but $InputDir has no files — running convert to rebuild input."
+        Invoke-ConvertStep
+    } else {
+        $DoneTimestamp = "unknown"
+        try {
+            $Done = Get-Content $ConvertDoneFile -Raw | ConvertFrom-Json
+            if ($Done -and $Done.timestamp) { $DoneTimestamp = [string]$Done.timestamp }
+        } catch {}
+        Log "Skipping convert — already completed at $DoneTimestamp (delete $ConvertDoneFile to force re-convert)"
+    }
+} elseif (Test-Path $ConvertProgressFile) {
+    Log "Detected $ConvertProgressFile — prior convert appears incomplete. Running incremental convert to resume."
+    Invoke-ConvertStep
 } else {
     Invoke-ConvertStep
 }
 
+$_OutputDir = Join-Path $Target "output"
+$_OutputHasParquet = (Test-Path $_OutputDir) -and (Get-ChildItem $_OutputDir -Recurse -Filter "*.parquet" -ErrorAction SilentlyContinue | Select-Object -First 1)
+
 $IndexAlreadyDone = $false
 $_shardStatus = Get-ShardStatus
-if ($_shardStatus -and $_shardStatus.'#completed' -eq $true) { $IndexAlreadyDone = $true }
+if ($_shardStatus -and $_shardStatus.'#completed' -eq $true) {
+    if ($_OutputHasParquet) {
+        $IndexAlreadyDone = $true
+    } else {
+        Log "Index marker says completed but output parquet files are missing — clearing marker and re-indexing."
+        Remove-Item (Join-Path $Target ".shard_status.json") -Force -ErrorAction SilentlyContinue
+    }
+}
 
 if ($SkipIndex -or $IndexAlreadyDone) {
     if ($IndexAlreadyDone) {

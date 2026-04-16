@@ -6,12 +6,25 @@
     Reports are generated separately on demand via graphragloader query.
 
 .USAGE
+    *** RE-RUN AFTER CRASH / INTERRUPTION: pass NO flags. Ever. ***
+    The script auto-detects what is already done and skips it automatically.
+
+    # Normal run — first time or any restart:
     & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_finance_analysis.ps1"
-    & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_finance_analysis.ps1" -SkipConvert
+
+    # Status check only (no workflow steps executed):
     & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_finance_analysis.ps1" -CheckShardStatus
-    # After convert completes, a .convert_done.json marker is written to $Target.
-    # Restarts automatically skip convert when this file exists.
-    # Delete D:\FinanceRAG\.convert_done.json to force a full re-convert.
+
+    AUTO-SKIP RULES (handled internally — you do nothing):
+      Convert : skipped when .convert_done.json exists and input/ has files
+      Index   : skipped when .shard_status.json marks it complete AND output/ has parquet files
+
+    FORCE A STEP TO RE-RUN (delete its marker, then plain re-run):
+      Re-convert : Remove-Item "D:\FinanceRAG\.convert_done.json"
+      Re-index   : Remove-Item "D:\FinanceRAG\.shard_status.json"; Remove-Item "D:\FinanceRAG\output" -Recurse
+
+    EMERGENCY SKIP FLAGS (-SkipConvert, -SkipIndex) EXIST BUT SHOULD NEVER BE NEEDED.
+    If you think you need one, delete the relevant marker instead and plain re-run.
 #>
 param(
     [switch]$SkipConvert,
@@ -321,27 +334,51 @@ function Wait-OllamaEmbedding {
     throw "Embedding model did not become ready within $TimeoutSeconds seconds: $ModelName"
 }
 
+function Update-SettingsEmbedText {
+    param([string]$SettingsPath)
+    if (-not (Test-Path $SettingsPath)) { return }
+
+    $Content = Get-Content -Path $SettingsPath -Raw
+    if ($Content -match '\bembed_text\s*:') {
+        $Updated = $false
+        $New = [regex]::Replace($Content, '(?m)^(\s+batch_max_tokens:)\s*\d+', "`${1} 2000")
+        if ($New -ne $Content) { $Content = $New; $Updated = $true }
+        $New = [regex]::Replace($Content, '(?m)^(\s+batch_size:)\s*\d+', "`${1} 8")
+        if ($New -ne $Content) { $Content = $New; $Updated = $true }
+        if ($Updated) {
+            Set-Content -Path $SettingsPath -Value $Content -Encoding UTF8 -NoNewline
+            Log "Updated settings.yaml embed_text: batch_size=8, batch_max_tokens=2000"
+        } else {
+            Log "settings.yaml embed_text already configured correctly"
+        }
+    } else {
+        $Block = "`r`n" + "embed_text:`r`n" + "  batch_size: 8`r`n" + "  batch_max_tokens: 2000`r`n"
+        Add-Content -Path $SettingsPath -Value $Block -Encoding UTF8
+        Log "Added embed_text section to settings.yaml: batch_size=8, batch_max_tokens=2000"
+    }
+}
+
 function Initialize-Settings {
     $SettingsPath = Join-Path $Target "settings.yaml"
     if (Test-Path $SettingsPath) {
         Log "settings.yaml already exists"
-        Update-SettingsTimeouts -SettingsPath $SettingsPath
-        return
+    } else {
+        Log "Generating settings.yaml"
+        $InitArgs = @(
+            "init",
+            "--target",          $Target,
+            "--provider",        $Provider,
+            "--model",           $Model,
+            "--embedding-model", $EmbeddingModel,
+            "--request-timeout", $RequestTimeout
+        )
+        & $LoaderExe @InitArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to generate settings.yaml"
+        }
     }
-    Log "Generating settings.yaml"
-    $InitArgs = @(
-        "init",
-        "--target",          $Target,
-        "--provider",        $Provider,
-        "--model",           $Model,
-        "--embedding-model", $EmbeddingModel,
-        "--request-timeout", $RequestTimeout
-    )
-    & $LoaderExe @InitArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to generate settings.yaml"
-    }
-    Update-SettingsTimeouts -SettingsPath $SettingsPath
+    Update-SettingsTimeouts  -SettingsPath $SettingsPath
+    Update-SettingsEmbedText -SettingsPath $SettingsPath
 }
 
 function Update-SettingsTimeouts {
@@ -419,9 +456,11 @@ function Invoke-IndexStep {
         "--method", $GraphMethod
     )
     $OutputDir = Join-Path $Target "output"
-    if ((Test-Path $OutputDir) -and (Get-ChildItem $OutputDir -Directory -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-        $IndexArgs += "--resume"
-        Log "Detected existing GraphRAG output artifacts — adding --resume to continue from last checkpoint"
+    if ((Test-Path $OutputDir) -and (Get-ChildItem $OutputDir -File -Filter "*.parquet" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+        # GraphRAG 3.x does not support --resume. The pipeline auto-skips
+        # workflows whose output parquet files already exist in the output
+        # directory and re-runs only the ones that are missing or incomplete.
+        Log "Detected existing GraphRAG output artifacts — pipeline will auto-skip completed workflows"
     }
     $StartTime = Get-Date
     Log "Running GraphRAG index..."
@@ -464,7 +503,7 @@ function Show-ResumptionGuide {
     }
     Write-Host ""
     Write-Host "RESUME BEHAVIOR (automatic — no flags needed):" -ForegroundColor White
-    Write-Host "  Convert  : skipped automatically when .convert_done.json exists"  -ForegroundColor Green
+    Write-Host "  Convert  : skipped when marker is valid; otherwise runs incremental convert"  -ForegroundColor Green
     Write-Host "  Index    : skipped automatically when already complete; resumes from last finished workflow otherwise" -ForegroundColor Green
     Write-Host ""
     Write-Host "TO START FRESH (delete marker files):" -ForegroundColor White
@@ -490,18 +529,45 @@ if ($CheckShardStatus) {
 Test-Prerequisite
 Initialize-Settings
 
+$InputDir = Join-Path $Target "input"
+$InputHasFiles = (Test-Path $InputDir) -and (Get-ChildItem $InputDir -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)
+$ConvertProgressFile = Join-Path $Target ".convert_progress"
+
 if ($SkipConvert) {
     Log "Skipping convert (-SkipConvert flag set)"
 } elseif (Test-Path $ConvertDoneFile) {
-    $Done = Get-Content $ConvertDoneFile -Raw | ConvertFrom-Json
-    Log "Skipping convert — already completed at $($Done.timestamp) (delete $ConvertDoneFile to force re-convert)"
+    # .convert_done.json takes priority over .convert_progress — completion wins.
+    if (-not $InputHasFiles) {
+        Log "Convert marker exists but $InputDir has no files — running convert to rebuild input."
+        Invoke-ConvertStep
+    } else {
+        $DoneTimestamp = "unknown"
+        try {
+            $Done = Get-Content $ConvertDoneFile -Raw | ConvertFrom-Json
+            if ($Done -and $Done.timestamp) { $DoneTimestamp = [string]$Done.timestamp }
+        } catch {}
+        Log "Skipping convert — already completed at $DoneTimestamp (delete $ConvertDoneFile to force re-convert)"
+    }
+} elseif (Test-Path $ConvertProgressFile) {
+    Log "Detected $ConvertProgressFile — prior convert appears incomplete. Running incremental convert to resume."
+    Invoke-ConvertStep
 } else {
     Invoke-ConvertStep
 }
 
+$_OutputDir = Join-Path $Target "output"
+$_OutputHasParquet = (Test-Path $_OutputDir) -and (Get-ChildItem $_OutputDir -Recurse -Filter "*.parquet" -ErrorAction SilentlyContinue | Select-Object -First 1)
+
 $IndexAlreadyDone = $false
 $_shardStatus = Get-ShardStatus
-if ($_shardStatus -and $_shardStatus.'#completed' -eq $true) { $IndexAlreadyDone = $true }
+if ($_shardStatus -and $_shardStatus.'#completed' -eq $true) {
+    if ($_OutputHasParquet) {
+        $IndexAlreadyDone = $true
+    } else {
+        Log "Index marker says completed but output parquet files are missing — clearing marker and re-indexing."
+        Remove-Item (Join-Path $Target ".shard_status.json") -Force -ErrorAction SilentlyContinue
+    }
+}
 
 if ($SkipIndex -or $IndexAlreadyDone) {
     if ($IndexAlreadyDone) {
