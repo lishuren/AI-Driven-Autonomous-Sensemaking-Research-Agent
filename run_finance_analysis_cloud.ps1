@@ -14,6 +14,8 @@
     & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_finance_analysis_cloud.ps1" -CheckShardStatus
     # After convert completes, a .convert_done.json marker is written to $Target.
     # Restarts automatically skip convert when this file exists.
+    # If input/ already has files but the marker is missing, convert runs incrementally
+    # (only missing/outdated files are processed) so interrupted runs can resume.
     # Delete D:\FinanceRAG-cloud\.convert_done.json to force a full re-convert.
 #>
 param(
@@ -472,7 +474,7 @@ function Show-ResumptionGuide {
     }
     Write-Host ""
     Write-Host "RESUME BEHAVIOR (automatic — no flags needed):" -ForegroundColor White
-    Write-Host "  Convert  : skipped automatically when .convert_done.json exists"  -ForegroundColor Green
+    Write-Host "  Convert  : skipped when .convert_done.json exists; otherwise runs incremental convert"  -ForegroundColor Green
     Write-Host "  Index    : skipped automatically when already complete; resumes from last finished workflow otherwise" -ForegroundColor Green
     Write-Host ""
     Write-Host "TO START FRESH (delete marker files):" -ForegroundColor White
@@ -575,9 +577,8 @@ if ($SkipConvert) {
     $Done = Get-Content $ConvertDoneFile -Raw | ConvertFrom-Json
     Log "Skipping convert — already completed at $($Done.timestamp) (delete $ConvertDoneFile to force re-convert)"
 } elseif ($InputHasFiles) {
-    Log "Skipping convert — $InputDir already contains files (copied manually). Writing completion marker."
-    @{ completed = $true; timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss"); source = "copied from D:\FinanceRAG\input"; max_chars = $ConvertMaxChars } |
-        ConvertTo-Json | Set-Content $ConvertDoneFile -Encoding UTF8
+    Log "Detected existing files in $InputDir without completion marker — running incremental convert to resume/finish missing files."
+    Invoke-ConvertStep
 } else {
     Invoke-ConvertStep
 }

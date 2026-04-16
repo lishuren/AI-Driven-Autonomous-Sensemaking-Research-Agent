@@ -18,6 +18,7 @@ import re
 import shutil
 import tempfile
 import time
+import warnings
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -286,6 +287,7 @@ def _extract_zip(
     *,
     include_code: bool = False,
     force: bool = False,
+    ocr_lang: Optional[str] = None,
 ) -> list[ConvertedDocument]:
     """Extract a ZIP archive into a temp dir and convert its contents."""
     try:
@@ -564,14 +566,51 @@ def _read_pdf_with_ocr(path: Path, lang: Optional[str] = None) -> Optional[str]:
     try:
         import pytesseract  # noqa: WPS433
         from pdf2image import convert_from_path  # noqa: WPS433
+        from pypdf import PdfReader  # noqa: WPS433
 
         _lang = lang or _detect_ocr_lang()
-        pages = convert_from_path(str(path), dpi=150)
+        # Validate structure first: malformed PDFs can make poppler emit huge
+        # stderr output, which can exhaust memory in subprocess reader threads.
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                reader = PdfReader(str(path), strict=False)
+                page_count = len(reader.pages)
+        except Exception as exc:
+            logger.warning(
+                "converter: skipping PDF OCR for %s — invalid PDF structure (%s)",
+                path, exc,
+            )
+            return None
+
+        if page_count <= 0:
+            return None
+
+        # OCR pages in small batches to cap peak memory use.
+        # This avoids loading all rendered pages at once for long PDFs.
+        batch_size = 8
+        max_pages = min(page_count, 200)
+        if page_count > max_pages:
+            logger.warning(
+                "converter: OCR page cap hit for %s — processing first %d / %d pages",
+                path, max_pages, page_count,
+            )
+
         parts: list[str] = []
-        for i, page in enumerate(pages, 1):
-            text = pytesseract.image_to_string(page, lang=_lang, timeout=120).strip()
-            if text:
-                parts.append(f"## Page {i}\n\n{text}")
+        for start_page in range(1, max_pages + 1, batch_size):
+            end_page = min(start_page + batch_size - 1, max_pages)
+            pages = convert_from_path(
+                str(path),
+                dpi=150,
+                first_page=start_page,
+                last_page=end_page,
+                thread_count=1,
+            )
+            for idx, page in enumerate(pages, 0):
+                page_num = start_page + idx
+                text = pytesseract.image_to_string(page, lang=_lang, timeout=120).strip()
+                if text:
+                    parts.append(f"## Page {page_num}\n\n{text}")
         return "\n\n".join(parts) if parts else None
     except ImportError:
         logger.info(
@@ -1039,7 +1078,14 @@ def _convert_files(
         logger.info("converter: phase 5/10 — ZIP archives  (%d files)", len(archive_files))
     for f in archive_files:
         _tick(f)
-        extracted = _extract_zip(f, output_dir, max_chars, include_code=include_code, force=force)
+        extracted = _extract_zip(
+            f,
+            output_dir,
+            max_chars,
+            include_code=include_code,
+            force=force,
+            ocr_lang=ocr_lang,
+        )
         results.extend(extracted)
 
     # Phase 6: RAR archives (optional dep: rarfile).
