@@ -474,13 +474,6 @@ for pkg in missing:
 "@ 2>&1 | Out-Null
 
     $IndexArgs = @("index", "--root", $Target, "--method", $GraphMethod)
-    $OutputDir = Join-Path $Target "output"
-    if ((Test-Path $OutputDir) -and (Get-ChildItem $OutputDir -File -Filter "*.parquet" -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-        # GraphRAG 3.x does not support --resume. The pipeline auto-skips
-        # workflows whose output parquet files already exist in the output
-        # directory and re-runs only the ones that are missing or incomplete.
-        Log "Detected existing GraphRAG output artifacts — pipeline will auto-skip completed workflows"
-    }
     Log "Running GraphRAG index (fast)..."
     & $GraphRagExe @IndexArgs
     if ($LASTEXITCODE -ne 0) { throw "GraphRAG index failed with exit code $LASTEXITCODE" }
@@ -580,7 +573,7 @@ function Show-ResumptionGuide {
     Write-Host ""
     Write-Host "RESUME BEHAVIOR (automatic — no flags needed):" -ForegroundColor White
     Write-Host "  Convert  : skipped when marker is valid; otherwise runs incremental convert"  -ForegroundColor Green
-    Write-Host "  Index    : skipped automatically when already complete; resumes from last finished workflow otherwise" -ForegroundColor Green
+    Write-Host "  Index    : skipped automatically when already complete; re-runs ALL workflows from scratch otherwise (LLM cache makes it fast)" -ForegroundColor Green
     Write-Host "  Reports  : skipped individually when the .md file already exists" -ForegroundColor Green
     Write-Host ""
     Write-Host "TO START FRESH (delete marker files):" -ForegroundColor White
