@@ -280,7 +280,6 @@ function Wait-OllamaModel {
 
     try {
         while ((Get-Date) -lt $Deadline) {
-            Start-Sleep -Seconds $PollIntervalSeconds
             try {
                 $Ps = Invoke-RestMethod -Uri $PsUrl -Method Get -TimeoutSec 10 -ErrorAction Stop
                 $Loaded = @($Ps.models | Where-Object { $_.name -like "$ModelName*" -and $_.size -gt 0 })
@@ -289,8 +288,27 @@ function Wait-OllamaModel {
                     return
                 }
             } catch {}
-            $Remaining = [int]($Deadline - (Get-Date)).TotalSeconds
-            Log "Model not loaded yet ($ModelName), retrying in $PollIntervalSeconds s... ($Remaining s remaining)"
+
+            # Fallback: some Ollama builds lag in /api/ps reporting. If a tiny
+            # direct generate succeeds, the model is ready for indexing.
+            try {
+                $ProbeBody = @{ model = $ModelName; prompt = "ping"; stream = $false; options = @{ num_predict = 1 }; keep_alive = "30m" } | ConvertTo-Json -Depth 5
+                $Probe = Invoke-RestMethod -Uri $WarmupUrl -Method Post -ContentType "application/json" -Body $ProbeBody -TimeoutSec 120 -ErrorAction Stop
+                if ($null -ne $Probe) {
+                    Log "Model ready via generate probe: $ModelName"
+                    return
+                }
+            } catch {
+                if (Test-OllamaMissingModelError $_) {
+                    throw "Model is missing from Ollama: $ModelName. Install it with: ollama pull $ModelName"
+                }
+            }
+
+            $Remaining = [Math]::Max(0, [int]($Deadline - (Get-Date)).TotalSeconds)
+            if ($Remaining -le 0) { break }
+            $SleepSeconds = [Math]::Min($PollIntervalSeconds, $Remaining)
+            Log "Model not loaded yet ($ModelName), retrying in $SleepSeconds s... ($Remaining s remaining)"
+            Start-Sleep -Seconds $SleepSeconds
         }
         throw "Model did not load within $TimeoutSeconds s: $ModelName"
     } finally {
