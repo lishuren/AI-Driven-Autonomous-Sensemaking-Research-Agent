@@ -1,30 +1,28 @@
 <#
 .SYNOPSIS
-    Fast-processing variant of run_mainstream_analysis.ps1 targeting 48-72h completion.
+    Cloud-model variant of run_mainstream_fast.ps1 using gemma4:31b-cloud.
 
-    Key differences from the standard script:
-      - Max chars per document : 100,000  (was 500,000) — ~5x fewer chars ingested
-      - GraphRAG indexing method: fast    (was standard) — lighter extraction algorithms
-      - Chunk size             : 2,000    (was 1,200)   — ~40 % fewer text units → fewer LLM calls
-      - Chunk overlap          : 150      (was 100)
-      - Dual-model strategy    : small model for indexing, larger model for reports
+    Reuses D:\mainstreamGraphRAG so all prior convert output and partially-completed
+    index workflows are preserved.  GraphRAG 3.x auto-skips workflows whose output
+    parquet files already exist, so only incomplete steps (e.g. create_community_reports_text)
+    will actually run.  The ~2,593/8,324 community reports already cached from the local
+    run will be replayed instantly.
 
-    Default model split:
-      -IndexModel  gemma4:e2b  — fits entirely in 8 GB VRAM, fast entity extraction
-      -ReportModel gemma4:e4b  — higher quality for final report synthesis
+    Key differences from the fast script:
+      - Model          : gemma4:31b-cloud (Ollama-proxied cloud) for both index and reports
+      - No dual-model  : cloud is fast enough for everything
+      - Pre-flight     : checks cloud model accessibility and quota before starting work
+      - Resilient      : just re-run after any crash — no flags needed
 
 .USAGE
     *** RE-RUN AFTER CRASH / INTERRUPTION: pass NO flags. Ever. ***
     The script auto-detects what is already done and skips it automatically.
 
     # Normal run — first time or any restart:
-    & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1"
+    & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_cloud.ps1"
 
     # Status check only (no workflow steps executed):
-    & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -CheckShardStatus
-
-    # Override models (optional, not needed for re-runs):
-    & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_fast.ps1" -IndexModel "gemma4:e2b" -ReportModel "gemma4:e4b"
+    & "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\run_mainstream_cloud.ps1" -CheckShardStatus
 
     AUTO-SKIP RULES (handled internally — you do nothing):
       Convert : skipped when .convert_done.json exists and input/ has files
@@ -42,13 +40,7 @@
 param(
     [switch]$SkipConvert,
     [switch]$SkipIndex,
-    [switch]$CheckShardStatus,
-    # Small, fast model used during GraphRAG indexing (entity extraction).
-    # gemma4:e2b fits fully in 8 GB VRAM with ~3 GB headroom — no CPU offload.
-    [string]$IndexModel  = "gemma4:e2b",
-    # Higher-quality model used only for the 5 final report queries.
-    # Runs after indexing is complete; each query is a single LLM call.
-    [string]$ReportModel = "gemma4:e4b"
+    [switch]$CheckShardStatus
 )
 
 Set-StrictMode -Version Latest
@@ -58,37 +50,26 @@ $env:DISABLE_AIOHTTP_TRANSPORT    = "True"
 $env:LITELLM_LOCAL_MODEL_COST_MAP = "True"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
-$LoaderExe  = "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\graphragloader.exe"
+$LoaderExe   = "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\graphragloader.exe"
 $GraphRagExe = "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\graphrag.exe"
-$PythonExe  = "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\python.exe"
-$Source     = "D:\Mainstream"
-$Target     = "D:\mainstreamGraphRAG"
-$ReportsDir = Join-Path $Target "reports"
-$LogFile    = Join-Path $Target "run_mainstream_fast.log"   # separate log — does not clobber standard log
-$ConvertDoneFile = Join-Path $Target ".convert_done.json"   # written after a successful convert; auto-skips re-convert on restart
-# Restarts skip convert when this file exists and input/ still has files.
-# If .convert_progress exists or input/ is empty, convert runs incrementally.
+$PythonExe   = "D:\Dev\AI-Driven-Autonomous-Sensemaking-Research-Agent\.venv\Scripts\python.exe"
+$Source      = "D:\Mainstream"
+$Target      = "D:\mainstreamGraphRAG"
+$ReportsDir  = Join-Path $Target "reports"
+$LogFile     = Join-Path $Target "run_mainstream_cloud.log"
+$ConvertDoneFile = Join-Path $Target ".convert_done.json"
 
-# ── FAST-MODE SETTINGS ───────────────────────────────────────────────────────
+# ── CLOUD-MODE SETTINGS ─────────────────────────────────────────────────────
 $Provider       = "ollama"
+$Model          = "gemma4:31b-cloud"
 $EmbeddingModel = "nomic-embed-text"
 $QueryMethod    = "global"
 $RequestTimeout = 1800
-
-# Reduced from 500,000 — limits how much raw text per file goes into GraphRAG input.
-# Effect: convert writes smaller .txt files → fewer / smaller chunks → far fewer LLM calls.
 $ConvertMaxChars = 100000
-
-# "fast" uses a lighter entity-extraction algorithm (no claim extraction, fewer passes).
-# Effect: each text unit is processed in ~30-50% of the time vs. "standard".
 $GraphMethod    = "fast"
-
-# Larger chunks → fewer text units in total → fewer extract_graph LLM calls.
-# 2,000 tokens ≈ 40% fewer units than 1,200 (e.g. 30,108 → ~18,000).
 $FastChunkSize    = 2000
 $FastChunkOverlap = 150
-
-$OllamaBaseUrl = "http://localhost:11434"
+$OllamaBaseUrl  = "http://localhost:11434"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 function Log {
@@ -103,7 +84,7 @@ function Test-Prerequisite {
     if (-not (Test-Path $LoaderExe))   { throw "graphragloader.exe not found: $LoaderExe" }
     if (-not (Test-Path $GraphRagExe)) { throw "graphrag.exe not found: $GraphRagExe" }
     if (-not (Test-Path $Source))      { throw "Source directory not found: $Source" }
-    New-Item -ItemType Directory -Force -Path $Target   | Out-Null
+    New-Item -ItemType Directory -Force -Path $Target     | Out-Null
     New-Item -ItemType Directory -Force -Path $ReportsDir | Out-Null
 }
 
@@ -165,13 +146,19 @@ function Test-OllamaModelInstalled {
 
 function Confirm-OllamaModelsInstalled {
     param([string[]]$ModelNames)
+    # Cloud models (e.g. gemma4:31b-cloud) are not listed in /api/tags — skip local check for them.
+    $LocalModels = @($ModelNames | Where-Object { $_ -notmatch '-cloud$' })
+    if ($LocalModels.Count -eq 0) {
+        Log "All models are cloud models — skipping local install check: $($ModelNames -join ', ')"
+        return
+    }
     $Installed = @(Get-OllamaInstalledModels)
-    $Missing   = @($ModelNames | Where-Object { -not (Test-OllamaModelInstalled -ModelName $_ -InstalledModels $Installed) })
+    $Missing   = @($LocalModels | Where-Object { -not (Test-OllamaModelInstalled -ModelName $_ -InstalledModels $Installed) })
     if ($Missing.Count -gt 0) {
         $Cmds = ($Missing | ForEach-Object { "ollama pull $_" }) -join "; "
         throw "Required Ollama model(s) not installed: $($Missing -join ', '). Install them first: $Cmds"
     }
-    Log "Verified Ollama models are installed: $($ModelNames -join ', ')"
+    Log "Verified Ollama models are installed: $($LocalModels -join ', ')"
 }
 
 function Test-OllamaMissingModelError {
@@ -213,17 +200,32 @@ function Wait-Ollama {
 }
 
 function Wait-OllamaModel {
-    # Triggers model loading via a background generate job, then polls /api/ps
-    # to detect when Ollama has the model in memory.  This avoids blocking on
-    # inference itself, which can exceed any timeout on CPU-heavy configs.
     param([string]$ModelName, [int]$TimeoutSeconds = 3600, [int]$PollIntervalSeconds = 60)
+
+    # Cloud models run remotely — skip /api/ps polling, just verify reachability.
+    if ($ModelName -match '-cloud$') {
+        Log "Cloud model detected ($ModelName) — verifying reachability via test generate..."
+        $WarmupUrl  = "$OllamaBaseUrl/api/generate"
+        $WarmupBody = @{
+            model   = $ModelName
+            prompt  = "hello"
+            stream  = $false
+            options = @{ num_predict = 1 }
+        } | ConvertTo-Json -Depth 5
+        try {
+            $Response = Invoke-RestMethod -Uri $WarmupUrl -Method Post -ContentType "application/json" -Body $WarmupBody -TimeoutSec 120 -ErrorAction Stop
+            Log "Cloud model ready: $ModelName"
+        } catch {
+            throw "Cloud model $ModelName is not reachable. Ensure you are signed in with: ollama signin. Error: $_"
+        }
+        return
+    }
+
     $PsUrl     = "$OllamaBaseUrl/api/ps"
     $WarmupUrl = "$OllamaBaseUrl/api/generate"
     $Deadline  = (Get-Date).AddSeconds($TimeoutSeconds)
     Log "Warming up model: $ModelName (timeout=$TimeoutSeconds s)..."
 
-    # Fire a generate in the background to trigger Ollama to load the model.
-    # keep_alive=30m prevents it from unloading before the indexer starts.
     $WarmupBody = @{ model = $ModelName; prompt = "hello"; stream = $false; options = @{ num_predict = 1 }; keep_alive = "30m" } | ConvertTo-Json -Depth 5
     $WarmupJob = Start-Job -ScriptBlock {
         param($Url, $Body)
@@ -241,8 +243,6 @@ function Wait-OllamaModel {
                 }
             } catch {}
 
-            # Fallback: some Ollama builds lag in /api/ps reporting. If a tiny
-            # direct generate succeeds, the model is ready for indexing.
             try {
                 $ProbeBody = @{ model = $ModelName; prompt = "ping"; stream = $false; options = @{ num_predict = 1 }; keep_alive = "30m" } | ConvertTo-Json -Depth 5
                 $Probe = Invoke-RestMethod -Uri $WarmupUrl -Method Post -ContentType "application/json" -Body $ProbeBody -TimeoutSec 120 -ErrorAction Stop
@@ -288,24 +288,18 @@ function Wait-OllamaEmbedding {
 }
 
 # Swaps the completion model name inside settings.yaml.
-# Called between the index and report phases to hot-swap models.
 function Update-SettingsModel {
     param([string]$SettingsPath, [string]$ModelName)
     if (-not (Test-Path $SettingsPath)) { return }
 
-    # Line-by-line scan: find "model:" inside the default_completion_model block.
-    # Avoids CRLF/LF regex hazards and fragile multiline lookaheads.
     $Lines = Get-Content -LiteralPath $SettingsPath -Encoding UTF8
     $InBlock = $false
     $Patched = $false
 
     $NewLines = foreach ($Line in $Lines) {
-        # Enter block when we see the (indented) default_completion_model key.
         if ($Line -match '^\s+default_completion_model:') { $InBlock = $true }
-        # Exit block on any top-level (non-indented, non-empty) key.
         elseif ($InBlock -and $Line -match '^[^ \t]' -and $Line.Trim() -ne '') { $InBlock = $false }
 
-        # Patch the first "model:" line inside the block (NOT "model_provider:").
         if ($InBlock -and -not $Patched -and $Line -match '^(\s+model:)\s*\S+') {
             $Line = $Matches[1] + " $ModelName"
             $Patched = $true
@@ -328,11 +322,9 @@ function Update-SettingsChunking {
     $Content = Get-Content -Path $SettingsPath -Raw
     $Updated = $false
 
-    # Replace  "  size: <number>"  inside the chunking block.
     $New = [regex]::Replace($Content, '(?m)^(\s+size:)\s*\d+', "`${1} $FastChunkSize")
     if ($New -ne $Content) { $Content = $New; $Updated = $true }
 
-    # Replace  "  overlap: <number>"  inside the chunking block.
     $New = [regex]::Replace($Content, '(?m)^(\s+overlap:)\s*\d+', "`${1} $FastChunkOverlap")
     if ($New -ne $Content) { $Content = $New; $Updated = $true }
 
@@ -342,24 +334,12 @@ function Update-SettingsChunking {
     }
 }
 
-# Ensures the embed_text section is present in settings.yaml with a safe
-# batch_max_tokens for nomic-embed-text.
-#
-# Background: nomic-embed-text uses BERT tokenization, which produces ~2.7x
-# more tokens than the tiktoken (cl100k_base) tokenizer that GraphRAG/LiteLLM
-# uses for token counting.  The default batch_max_tokens=8191 (tiktoken units)
-# can therefore send chunks of ~22000 actual BERT tokens to Ollama, exceeding
-# nomic's hard 8192-token context limit and causing HTTP 400 errors.
-#
-# Setting batch_max_tokens=2000 (tiktoken) caps real chunk sizes at ~5400 BERT
-# tokens — comfortably within the 8192 limit while processing all data in one pass.
 function Update-SettingsEmbedText {
     param([string]$SettingsPath)
     if (-not (Test-Path $SettingsPath)) { return }
 
     $Content = Get-Content -Path $SettingsPath -Raw
     if ($Content -match '\bembed_text\s*:') {
-        # Section exists — patch batch_max_tokens if it is still the unsafe default.
         $Updated = $false
         $New = [regex]::Replace($Content, '(?m)^(\s+batch_max_tokens:)\s*\d+', "`${1} 2000")
         if ($New -ne $Content) { $Content = $New; $Updated = $true }
@@ -372,7 +352,6 @@ function Update-SettingsEmbedText {
             Log "settings.yaml embed_text already configured correctly"
         }
     } else {
-        # Section missing — append it.
         $Block = "`r`n" + "embed_text:`r`n" + "  batch_size: 8`r`n" + "  batch_max_tokens: 2000`r`n"
         Add-Content -Path $SettingsPath -Value $Block -Encoding UTF8
         Log "Added embed_text section to settings.yaml: batch_size=8, batch_max_tokens=2000"
@@ -418,12 +397,12 @@ function Initialize-Settings {
     if (Test-Path $SettingsPath) {
         Log "settings.yaml already exists"
     } else {
-        Log "Generating settings.yaml (init model: $IndexModel)"
+        Log "Generating settings.yaml (model: $Model)"
         $InitArgs = @(
             "init",
             "--target",          $Target,
             "--provider",        $Provider,
-            "--model",           $IndexModel,
+            "--model",           $Model,
             "--embedding-model", $EmbeddingModel,
             "--request-timeout", $RequestTimeout
         )
@@ -433,12 +412,61 @@ function Initialize-Settings {
     Update-SettingsTimeouts  -SettingsPath $SettingsPath
     Update-SettingsChunking  -SettingsPath $SettingsPath
     Update-SettingsEmbedText -SettingsPath $SettingsPath
-    # Ensure settings.yaml reflects the requested index model (survives re-runs).
-    Update-SettingsModel     -SettingsPath $SettingsPath -ModelName $IndexModel
+    # Ensure settings.yaml reflects the cloud model
+    Update-SettingsModel     -SettingsPath $SettingsPath -ModelName $Model
+}
+
+function Test-CloudModelAccessible {
+    param([string]$ModelName)
+
+    if ($ModelName -notmatch '-cloud$') { return }
+
+    Log "Checking cloud model accessibility: $ModelName ..."
+    $WarmupUrl  = "$OllamaBaseUrl/api/generate"
+    $WarmupBody = @{
+        model   = $ModelName
+        prompt  = "hi"
+        stream  = $false
+        options = @{ num_predict = 1 }
+    } | ConvertTo-Json -Depth 5
+
+    try {
+        $Response = Invoke-RestMethod -Uri $WarmupUrl -Method Post -ContentType "application/json" `
+            -Body $WarmupBody -TimeoutSec 120 -ErrorAction Stop
+        Log "Cloud model accessible: $ModelName — ready to proceed."
+    } catch {
+        $Msg = ''
+        try { $Msg = $_.ErrorDetails.Message } catch {}
+        if (-not $Msg) { try { $Msg = $_.Exception.Message } catch {} }
+        if (-not $Msg) { $Msg = $_.ToString() }
+
+        if ($Msg -match 'quota|rate.?limit|daily.?limit|limit.?exceeded|too.?many.?request|429') {
+            Log "DAILY QUOTA REACHED for $ModelName — stopping now. Re-run tomorrow." "WARN"
+            Log "Server response: $Msg" "WARN"
+            Write-Host ""
+            Write-Host "============================================================" -ForegroundColor Yellow
+            Write-Host "  Cloud model daily quota reached: $ModelName" -ForegroundColor Yellow
+            Write-Host "  No work was started." -ForegroundColor Yellow
+            Write-Host "  Re-run the script tomorrow — it will resume automatically." -ForegroundColor Yellow
+            Write-Host "============================================================" -ForegroundColor Yellow
+            Write-Host ""
+            exit 0
+        }
+
+        Log "Cloud model $ModelName is NOT accessible — stopping. Error: $Msg" "ERROR"
+        Write-Host ""
+        Write-Host "============================================================" -ForegroundColor Red
+        Write-Host "  Cannot reach cloud model: $ModelName" -ForegroundColor Red
+        Write-Host "  Ensure you are signed in: ollama signin" -ForegroundColor Red
+        Write-Host "  Error: $Msg" -ForegroundColor Red
+        Write-Host "============================================================" -ForegroundColor Red
+        Write-Host ""
+        exit 1
+    }
 }
 
 function Invoke-ConvertStep {
-    Log "Step 1/3 Convert started  max_chars=$ConvertMaxChars (fast mode)"
+    Log "Step 1/3 Convert started  max_chars=$ConvertMaxChars (cloud mode)"
     $ConvertArgs = @(
         "convert",
         "--source",    $Source,
@@ -448,24 +476,19 @@ function Invoke-ConvertStep {
     )
     & $LoaderExe @ConvertArgs
     if ($LASTEXITCODE -ne 0) { throw "Convert failed with exit code $LASTEXITCODE" }
-    # Write a completion marker so restarts automatically skip convert.
     @{ completed = $true; timestamp = (Get-Date -Format "yyyy-MM-dd HH:mm:ss"); source = $Source; max_chars = $ConvertMaxChars } |
         ConvertTo-Json | Set-Content $ConvertDoneFile -Encoding UTF8
     Log "Convert complete."
 }
 
 function Invoke-IndexStep {
-    Log "Step 2/3 GraphRAG index started  method=$GraphMethod (fast mode)  index-model=$IndexModel"
+    Log "Step 2/3 GraphRAG index started  method=$GraphMethod (cloud mode)  model=$Model"
     $ShardStatusFile = Join-Path $Target ".shard_status.json"
     $ShardStatus     = @{}
     if (Test-Path $ShardStatusFile) {
         $ShardStatus = Get-Content $ShardStatusFile -Raw | ConvertFrom-Json -AsHashtable
-        Log "Found prior shard status — will resume from last completed workflow checkpoint"
+        Log "Found prior shard status — GraphRAG will auto-skip workflows with existing output parquets"
     }
-    # Ensure all NLTK packages the NLP pipeline needs are present.
-    # A corrupted/partial download leaves a .zip file behind and causes a
-    # silent "File is not a zip file" crash in extract_graph_nlp.
-    # Run 'graphragloader\check_status.ps1' section 4.8 if this still fails.
     Log "Ensuring NLTK data packages are available..."
     & $PythonExe -c @"
 import nltk, sys
@@ -494,16 +517,18 @@ for pkg in missing:
 "@ 2>&1 | Out-Null
 
     $IndexArgs = @("index", "--root", $Target, "--method", $GraphMethod)
-    Log "Running GraphRAG index (fast)..."
+    $StartTime = Get-Date
+    Log "Running GraphRAG index (cloud)..."
     & $GraphRagExe @IndexArgs
     if ($LASTEXITCODE -ne 0) { throw "GraphRAG index failed with exit code $LASTEXITCODE" }
+    $Elapsed = (Get-Date) - $StartTime
     $ShardStatus["#completed"]   = $true
     $ShardStatus["#timestamp"]   = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     $ShardStatus["#method"]      = $GraphMethod
-    $ShardStatus["#index-model"] = $IndexModel
-    $ShardStatus["#report-model"]= $ReportModel
+    $ShardStatus["#model"]       = $Model
+    $ShardStatus["#elapsed_min"] = [math]::Round($Elapsed.TotalMinutes, 1)
     $ShardStatus | ConvertTo-Json | Set-Content $ShardStatusFile -Encoding UTF8
-    Log "GraphRAG index complete."
+    Log "GraphRAG index complete. Elapsed: $([math]::Round($Elapsed.TotalHours, 2)) h  ($Model)"
 }
 
 function Invoke-ReportStep {
@@ -528,43 +553,9 @@ function Invoke-ReportStep {
     )
     $Output = (& $LoaderExe @QueryArgs 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) { Log "Report FAILED: $Name" "ERROR"; throw "Report failed: $Name" }
-    $Header = "# $Name`n`n> Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') (fast mode)`n`n"
+    $Header = "# $Name`n`n> Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') (cloud mode)`n`n"
     Set-Content -Path $OutFile -Value ($Header + $Output) -Encoding UTF8
     Log "Saved: $OutFile"
-}
-
-function Show-ModelStatus {
-    param(
-        [string]$Phase,          # e.g. "STARTUP", "INDEXING", "REPORTING"
-        [string]$ActiveModel,    # model currently active for LLM calls
-        [string]$ActiveColor = "Cyan",
-        [switch]$CheckInstalled  # if set, query Ollama and show install status
-    )
-    Write-Host ""
-    Write-Host "==============================================" -ForegroundColor DarkGray
-    Write-Host "  MODEL STATUS  --  $Phase" -ForegroundColor White
-    Write-Host "==============================================" -ForegroundColor DarkGray
-    Write-Host "  Index model   : $IndexModel" -ForegroundColor $(if ($ActiveModel -eq $IndexModel) { $ActiveColor } else { "Gray" })
-    Write-Host "  Report model  : $ReportModel" -ForegroundColor $(if ($ActiveModel -eq $ReportModel) { $ActiveColor } else { "Gray" })
-    Write-Host "  Embedding     : $EmbeddingModel" -ForegroundColor Gray
-    Write-Host "  Active now    : $ActiveModel" -ForegroundColor $ActiveColor
-
-    if ($CheckInstalled) {
-        $Tags = Get-OllamaTags -TimeoutSeconds 5
-        if ($Tags) {
-            $Installed = @($Tags.models | ForEach-Object { if ($_.name) { $_.name } })
-            foreach ($M in @($IndexModel, $ReportModel, $EmbeddingModel) | Select-Object -Unique) {
-                $Found = Test-OllamaModelInstalled -ModelName $M -InstalledModels $Installed
-                $StatusIcon  = if ($Found) { "[OK]" } else { "[MISSING]" }
-                $StatusColor = if ($Found) { "Green"  } else { "Red"     }
-                Write-Host "  $StatusIcon $M" -ForegroundColor $StatusColor
-            }
-        } else {
-            Write-Host "  (Ollama not yet reachable -- model status unknown)" -ForegroundColor Yellow
-        }
-    }
-    Write-Host "==============================================" -ForegroundColor DarkGray
-    Write-Host ""
 }
 
 function Get-ShardStatus {
@@ -576,12 +567,12 @@ function Get-ShardStatus {
 function Show-ResumptionGuide {
     $Status = Get-ShardStatus
     Write-Host ""
-    Write-Host "========== RESUMPTION GUIDE ==========" -ForegroundColor Cyan
+    Write-Host "========== RESUMPTION GUIDE [cloud] ==========" -ForegroundColor Cyan
     if ($Status) {
         Write-Host "Last index run  : $($Status.'#timestamp')" -ForegroundColor Yellow
-        if ($Status.'#method')       { Write-Host "Index method    : $($Status.'#method')"        -ForegroundColor Gray }
-        if ($Status.'#index-model')  { Write-Host "Index model     : $($Status.'#index-model')"   -ForegroundColor Gray }
-        if ($Status.'#report-model') { Write-Host "Report model    : $($Status.'#report-model')"  -ForegroundColor Gray }
+        if ($Status.'#method')      { Write-Host "Index method    : $($Status.'#method')"       -ForegroundColor Gray }
+        if ($Status.'#model')       { Write-Host "Model           : $($Status.'#model')"        -ForegroundColor Gray }
+        if ($Status.'#elapsed_min') { Write-Host "Index duration  : $($Status.'#elapsed_min') min" -ForegroundColor Gray }
         if ($Status.'#completed') {
             Write-Host "Index status    : COMPLETE" -ForegroundColor Green
         } else {
@@ -593,24 +584,22 @@ function Show-ResumptionGuide {
     Write-Host ""
     Write-Host "RESUME BEHAVIOR (automatic — no flags needed):" -ForegroundColor White
     Write-Host "  Convert  : skipped when marker is valid; otherwise runs incremental convert"  -ForegroundColor Green
-    Write-Host "  Index    : skipped automatically when already complete; re-runs ALL workflows from scratch otherwise (LLM cache makes it fast)" -ForegroundColor Green
+    Write-Host "  Index    : skipped automatically when already complete; GraphRAG skips workflows with existing output parquets" -ForegroundColor Green
     Write-Host "  Reports  : skipped individually when the .md file already exists" -ForegroundColor Green
     Write-Host ""
     Write-Host "TO START FRESH (delete marker files):" -ForegroundColor White
     Write-Host "  Re-convert : Remove-Item '$ConvertDoneFile'" -ForegroundColor Gray
     Write-Host "  Re-index   : Remove-Item '$Target\.shard_status.json'; Remove-Item '$Target\output' -Recurse" -ForegroundColor Gray
     Write-Host "  Re-report  : Remove-Item '$ReportsDir\<name>.md'" -ForegroundColor Gray
-    Write-Host "=============================================" -ForegroundColor DarkGray
+    Write-Host "================================================" -ForegroundColor DarkGray
     Write-Host ""
 }
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-Log "=== run_mainstream_fast.ps1 started ==="
-Log "FAST MODE: max_chars=$ConvertMaxChars  method=$GraphMethod  chunk_size=$FastChunkSize"
-Log "MODELS: index=$IndexModel  report=$ReportModel  embedding=$EmbeddingModel"
+Log "=== run_mainstream_cloud.ps1 started ==="
+Log "CLOUD MODE: model=$Model  method=$GraphMethod  chunk_size=$FastChunkSize"
 Log "DISABLE_AIOHTTP_TRANSPORT=$($env:DISABLE_AIOHTTP_TRANSPORT)"
 Log "LITELLM_LOCAL_MODEL_COST_MAP=$($env:LITELLM_LOCAL_MODEL_COST_MAP)"
-Show-ModelStatus -Phase "STARTUP" -ActiveModel $IndexModel -CheckInstalled
 
 if ($CheckShardStatus) {
     Show-ResumptionGuide
@@ -620,6 +609,14 @@ if ($CheckShardStatus) {
 Test-Prerequisite
 Initialize-Settings
 
+# Ensure Ollama API is up (needed for local embedding model)
+Wait-Ollama
+
+# Pre-flight: check cloud model accessibility before any long-running steps
+Test-CloudModelAccessible -ModelName $Model
+Confirm-OllamaModelsInstalled -ModelNames @($Model, $EmbeddingModel)
+Wait-OllamaEmbedding -ModelName $EmbeddingModel
+
 $InputDir = Join-Path $Target "input"
 $InputHasFiles = (Test-Path $InputDir) -and (Get-ChildItem $InputDir -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)
 $ConvertProgressFile = Join-Path $Target ".convert_progress"
@@ -627,7 +624,6 @@ $ConvertProgressFile = Join-Path $Target ".convert_progress"
 if ($SkipConvert) {
     Log "Skipping convert (-SkipConvert flag set)"
 } elseif (Test-Path $ConvertDoneFile) {
-    # .convert_done.json takes priority over .convert_progress — completion wins.
     if (-not $InputHasFiles) {
         Log "Convert marker exists but $InputDir has no files — running convert to rebuild input."
         Invoke-ConvertStep
@@ -667,34 +663,22 @@ if ($SkipIndex -or $IndexAlreadyDone) {
         Log "Skipping index (-SkipIndex flag set)"
     }
 } else {
-    Wait-Ollama
-    Confirm-OllamaModelsInstalled -ModelNames @($IndexModel, $EmbeddingModel)
-    Wait-OllamaModel     -ModelName $IndexModel
-    Wait-OllamaEmbedding -ModelName $EmbeddingModel
-    Show-ModelStatus -Phase "INDEXING" -ActiveModel $IndexModel -CheckInstalled
     Invoke-IndexStep
 }
 
-# ── Swap to report model before generating reports ────────────────────────────
-$SettingsPath = Join-Path $Target "settings.yaml"
-Log "Switching completion model to $ReportModel for report generation"
-Update-SettingsModel -SettingsPath $SettingsPath -ModelName $ReportModel
-Confirm-OllamaModelsInstalled -ModelNames @($ReportModel)
-Wait-OllamaModel -ModelName $ReportModel
-Show-ModelStatus -Phase "REPORTING" -ActiveModel $ReportModel -CheckInstalled -ActiveColor "Yellow"
-
+# ── Reports ───────────────────────────────────────────────────────────────────
 $Reports = @(
-    @{ Name = "analysis_report";        Question = "Provide a comprehensive analysis of this corpus: major themes, key findings, key entities and their relationships, uncertainties, and actionable conclusions. Include supporting evidence for each finding." },
-    @{ Name = "system_structure_report"; Question = "Describe the overall system structure: identify the core components and subsystems, their individual responsibilities, the interfaces and contracts between them, dependency relationships, and how the components collaborate to deliver end-to-end functionality." },
+    @{ Name = "analysis_report";         Question = "Provide a comprehensive analysis of this corpus: major themes, key findings, key entities and their relationships, uncertainties, and actionable conclusions. Include supporting evidence for each finding." },
+    @{ Name = "system_structure_report";  Question = "Describe the overall system structure: identify the core components and subsystems, their individual responsibilities, the interfaces and contracts between them, dependency relationships, and how the components collaborate to deliver end-to-end functionality." },
     @{ Name = "business_analysis_report"; Question = "Provide a business analysis: identify business objectives and stakeholders, map value drivers and revenue/cost levers, assess risks and opportunities, highlight strategic constraints, and provide recommendations with supporting evidence from the corpus." },
-    @{ Name = "flow_analysis_report";    Question = "Provide a flow analysis: describe end-to-end process flows and control flows, identify key decision points and branching logic, highlight bottlenecks or failure points, and suggest optimisations backed by evidence from the corpus." },
-    @{ Name = "data_flow_report";        Question = "Provide a data flow analysis: identify all data sources and ingestion paths, describe transformations and enrichment steps, map storage layers and data lineage, highlight data quality risks or gaps, and list governance and compliance checkpoints found in the corpus." }
+    @{ Name = "flow_analysis_report";     Question = "Provide a flow analysis: describe end-to-end process flows and control flows, identify key decision points and branching logic, highlight bottlenecks or failure points, and suggest optimisations backed by evidence from the corpus." },
+    @{ Name = "data_flow_report";         Question = "Provide a data flow analysis: identify all data sources and ingestion paths, describe transformations and enrichment steps, map storage layers and data lineage, highlight data quality risks or gaps, and list governance and compliance checkpoints found in the corpus." }
 )
 
 foreach ($r in $Reports) {
     Invoke-ReportStep -Name $r.Name -Question $r.Question
 }
 
-Log "=== All done (fast mode). Reports saved to: $ReportsDir ==="
+Log "=== All done (cloud mode). Reports saved to: $ReportsDir ==="
 Write-Host "Reports folder: $ReportsDir" -ForegroundColor Green
 Show-ResumptionGuide

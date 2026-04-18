@@ -558,6 +558,9 @@ def _read_ocr_image(path: Path, lang: Optional[str] = None) -> Optional[str]:
 def _read_pdf_with_ocr(path: Path, lang: Optional[str] = None) -> Optional[str]:
     """Render each PDF page as an image and OCR it.
 
+    Processes all pages.  Text truncation / chunking is handled downstream
+    by ``_write_output`` according to the caller's ``max_chars`` budget.
+
     Used as a fallback when LlamaIndex extracts no text (scanned/image PDF).
     Requires both the ``[ocr]`` extra and ``pdf2image`` / ``poppler``.
     """
@@ -589,16 +592,10 @@ def _read_pdf_with_ocr(path: Path, lang: Optional[str] = None) -> Optional[str]:
         # OCR pages in small batches to cap peak memory use.
         # This avoids loading all rendered pages at once for long PDFs.
         batch_size = 8
-        max_pages = min(page_count, 200)
-        if page_count > max_pages:
-            logger.warning(
-                "converter: OCR page cap hit for %s — processing first %d / %d pages",
-                path, max_pages, page_count,
-            )
 
         parts: list[str] = []
-        for start_page in range(1, max_pages + 1, batch_size):
-            end_page = min(start_page + batch_size - 1, max_pages)
+        for start_page in range(1, page_count + 1, batch_size):
+            end_page = min(start_page + batch_size - 1, page_count)
             pages = convert_from_path(
                 str(path),
                 dpi=150,

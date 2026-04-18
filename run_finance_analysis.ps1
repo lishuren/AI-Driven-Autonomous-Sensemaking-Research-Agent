@@ -414,29 +414,25 @@ function Update-SettingsTimeouts {
         $Updated = $true
     }
 
-    if ($Content -notmatch 'default_completion_model:[\s\S]*?timeout:') {
-        $Content = [regex]::Replace(
-            $Content,
-            '(default_completion_model:\r?\n(?:\s{4}.+\r?\n)*?\s{4}api_key:\s*ollama\r?\n)',
-            "$1    timeout: $RequestTimeout`r`n",
-            [System.Text.RegularExpressions.RegexOptions]::Multiline
-        )
-        $Updated = $true
-    }
+    $New = [regex]::Replace(
+        $Content,
+        '(default_completion_model:\r?\n(?:\s{4}.+\r?\n)*?\s{4}api_key:\s*ollama\r?\n)(?:\s{4}timeout:\s*\d+\r?\n)?(?:\s{4}call_args:\r?\n\s{6}timeout:\s*\d+\r?\n)?',
+        "`$1    call_args:`r`n      timeout: $RequestTimeout`r`n",
+        [System.Text.RegularExpressions.RegexOptions]::Multiline
+    )
+    if ($New -ne $Content) { $Content = $New; $Updated = $true }
 
-    if ($Content -notmatch 'default_embedding_model:[\s\S]*?timeout:') {
-        $Content = [regex]::Replace(
-            $Content,
-            '(default_embedding_model:\r?\n(?:\s{4}.+\r?\n)*?\s{4}api_key:\s*ollama\r?\n)',
-            "$1    timeout: $RequestTimeout`r`n",
-            [System.Text.RegularExpressions.RegexOptions]::Multiline
-        )
-        $Updated = $true
-    }
+    $New = [regex]::Replace(
+        $Content,
+        '(default_embedding_model:\r?\n(?:\s{4}.+\r?\n)*?\s{4}api_key:\s*ollama\r?\n)(?:\s{4}timeout:\s*\d+\r?\n)?(?:\s{4}call_args:\r?\n\s{6}timeout:\s*\d+\r?\n)?',
+        "`$1    call_args:`r`n      timeout: $RequestTimeout`r`n",
+        [System.Text.RegularExpressions.RegexOptions]::Multiline
+    )
+    if ($New -ne $Content) { $Content = $New; $Updated = $true }
 
     if ($Updated) {
         Set-Content -Path $SettingsPath -Value $Content -Encoding UTF8 -NoNewline
-        Log "Updated settings.yaml with timeout=$RequestTimeout for Ollama models"
+        Log "Updated settings.yaml with call_args.timeout=$RequestTimeout for Ollama models"
     }
 }
 
