@@ -274,12 +274,33 @@ function Wait-OllamaEmbedding {
     Log "Checking embedding model readiness: $ModelName (timeout=$TimeoutSeconds s)..."
     while ((Get-Date) -lt $Deadline) {
         try {
-            $Body = @{ model = $ModelName; prompt = "ping" } | ConvertTo-Json -Depth 5
-            $Resp = Invoke-RestMethod -Uri "$OllamaBaseUrl/api/embeddings" -Method Post -ContentType "application/json" -Body $Body -TimeoutSec 90 -ErrorAction Stop
-            if ($null -ne $Resp -and $null -ne $Resp.embedding) { Log "Embedding model ready: $ModelName"; return }
+            # Use the 'input' payload and try both common embedding endpoints.
+            $BodyObj = @{ model = $ModelName; input = @("ping") }
+            $Body = $BodyObj | ConvertTo-Json -Depth 5
+
+            # 1) Try /api/embed (some Ollama/litellm versions use this and return 'embeddings')
+            try {
+                $Resp = Invoke-RestMethod -Uri "$OllamaBaseUrl/api/embed" -Method Post -ContentType "application/json" -Body $Body -TimeoutSec 90 -ErrorAction Stop
+                if ($null -ne $Resp -and $Resp.embeddings -and ($Resp.embeddings.Count -gt 0)) { Log "Embedding model ready via /api/embed: $ModelName"; return }
+            } catch {
+                # ignore and try the other endpoint below
+            }
+
+            # 2) Try /api/embeddings (older/newer shapes may provide 'embedding' or 'embeddings')
+            try {
+                $Resp2 = Invoke-RestMethod -Uri "$OllamaBaseUrl/api/embeddings" -Method Post -ContentType "application/json" -Body $Body -TimeoutSec 90 -ErrorAction Stop
+                if ($null -ne $Resp2) {
+                    if ((($Resp2.embedding -ne $null) -and ($Resp2.embedding.Count -gt 0)) -or (($Resp2.embeddings -ne $null) -and ($Resp2.embeddings.Count -gt 0))) {
+                        Log "Embedding model ready via /api/embeddings: $ModelName"; return
+                    }
+                }
+            } catch {
+                if (Test-OllamaMissingModelError $_) { throw "Embedding model missing: $ModelName. Run: ollama pull $ModelName" }
+            }
         } catch {
             if (Test-OllamaMissingModelError $_) { throw "Embedding model missing: $ModelName. Run: ollama pull $ModelName" }
         }
+
         $Rem = [int]($Deadline - (Get-Date)).TotalSeconds
         Log "Embedding model not ready ($ModelName), retrying in $PollIntervalSeconds s... ($Rem s remaining)"
         Start-Sleep -Seconds $PollIntervalSeconds
