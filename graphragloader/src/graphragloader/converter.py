@@ -1006,7 +1006,7 @@ def _convert_files(
         if not text or not text.strip():
             logger.debug("converter: no extractable text for %s — skipping", f.name)
             continue
-        results.append(
+        results.extend(
             _write_output(f, text, output_dir, max_chars, force=force)
         )
         _lli_written += 1
@@ -1028,7 +1028,7 @@ def _convert_files(
         text = _read_plaintext(f)
         if not text or not text.strip():
             continue
-        results.append(
+        results.extend(
             _write_output(f, text, output_dir, max_chars, force=force)
         )
 
@@ -1047,7 +1047,7 @@ def _convert_files(
         text = _read_mobi(f)
         if not text or not text.strip():
             continue
-        results.append(
+        results.extend(
             _write_output(f, text, output_dir, max_chars, force=force)
         )
 
@@ -1066,7 +1066,7 @@ def _convert_files(
         text = _read_excel(f, max_chars=max_chars)
         if not text or not text.strip():
             continue
-        results.append(
+        results.extend(
             _write_output(f, text, output_dir, max_chars, fmt="excel", force=force)
         )
 
@@ -1107,9 +1107,9 @@ def _convert_files(
             continue
         text = _read_pptx_like(f)
         if text and text.strip():
-            results.append(
-                _write_output(f, text, output_dir, max_chars, fmt="pptx", force=force)
-            )
+                    results.extend(
+                        _write_output(f, text, output_dir, max_chars, fmt="pptx", force=force)
+                    )
 
     # Phase 8: legacy binary Office files (.doc, .ppt, .pps) via LibreOffice.
     if legacy_office_files:
@@ -1125,9 +1125,9 @@ def _convert_files(
             continue
         text = _read_via_libreoffice(f)
         if text and text.strip():
-            results.append(
-                _write_output(f, text, output_dir, max_chars, fmt=f.suffix.lstrip("."), force=force)
-            )
+                    results.extend(
+                        _write_output(f, text, output_dir, max_chars, fmt=f.suffix.lstrip("."), force=force)
+                    )
 
     # Phase 9: source code (when requested).
     if code_files and include_code:
@@ -1148,7 +1148,7 @@ def _convert_files(
                     continue
                 text = analyze_code_files(f)
                 if text and text.strip():
-                    results.append(
+                    results.extend(
                         _write_output(f, text, output_dir, max_chars, fmt="code", force=force)
                     )
         except ImportError:
@@ -1167,7 +1167,7 @@ def _convert_files(
                     continue
                 text = _read_plaintext(f)
                 if text and text.strip():
-                    results.append(
+                    results.extend(
                         _write_output(f, text, output_dir, max_chars, fmt="code", force=force)
                     )
 
@@ -1178,7 +1178,7 @@ def _convert_files(
         _tick(f)
         text = _read_ocr_image(f, lang=ocr_lang)
         if text and text.strip():
-            results.append(
+            results.extend(
                 _write_output(f, text, output_dir, max_chars, fmt="ocr", force=force)
             )
 
@@ -1193,7 +1193,7 @@ def _convert_files(
             if _looks_binary(text):
                 logger.debug("converter: %s appears binary — skipping", f.name)
                 continue
-            results.append(
+            results.extend(
                 _write_output(f, text, output_dir, max_chars, fmt="txt", force=force)
             )
         else:
@@ -1215,8 +1215,14 @@ def _write_output(
     *,
     fmt: str | None = None,
     force: bool = False,
-) -> ConvertedDocument:
-    """Write a single converted document to the output directory."""
+) -> list[ConvertedDocument]:
+    """Write converted document(s) to the output directory.
+
+    If *text* exceeds *max_chars*, split it into multiple numbered parts
+    instead of truncating so downstream embedding/chunking won't receive
+    excessively long single documents.
+    Returns a list of ConvertedDocument objects (one or more).
+    """
     out_name = _stable_filename(source)
     out_path = output_dir / out_name
 
@@ -1225,31 +1231,62 @@ def _write_output(
         try:
             if source.stat().st_mtime <= out_path.stat().st_mtime:
                 logger.debug("converter: %s — output up to date, skipping", source.name)
-                return ConvertedDocument(
-                    source_path=str(source.resolve()),
-                    target_path=str(out_path.resolve()),
-                    title=source.name,
-                    char_count=0,
-                    format=fmt or source.suffix.lstrip(".") or "txt",
-                    metadata={"size_bytes": source.stat().st_size, "skipped": True},
-                )
+                return [
+                    ConvertedDocument(
+                        source_path=str(source.resolve()),
+                        target_path=str(out_path.resolve()),
+                        title=source.name,
+                        char_count=0,
+                        format=fmt or source.suffix.lstrip(".") or "txt",
+                        metadata={"size_bytes": source.stat().st_size, "skipped": True},
+                    )
+                ]
         except OSError:
             pass  # If stat fails, fall through and re-convert.
 
-    if len(text) > max_chars:
-        text = text[:max_chars]
-        logger.warning("converter: truncated %s to %d chars.", source.name, max_chars)
-
     header = _build_metadata_header(source)
-    full_text = header + text
 
-    out_path.write_text(full_text, encoding="utf-8")
+    # If the text fits within max_chars, write a single file.
+    if len(text) <= max_chars:
+        full_text = header + text
+        out_path.write_text(full_text, encoding="utf-8")
+        return [
+            ConvertedDocument(
+                source_path=str(source.resolve()),
+                target_path=str(out_path.resolve()),
+                title=source.name,
+                char_count=len(text),
+                format=fmt or source.suffix.lstrip(".") or "txt",
+                metadata={"size_bytes": source.stat().st_size},
+            )
+        ]
 
-    return ConvertedDocument(
-        source_path=str(source.resolve()),
-        target_path=str(out_path.resolve()),
-        title=source.name,
-        char_count=len(text),
-        format=fmt or source.suffix.lstrip(".") or "txt",
-        metadata={"size_bytes": source.stat().st_size},
+    # Otherwise split into multiple parts.
+    parts: list[ConvertedDocument] = []
+    base = out_name[:-4]  # strip .txt
+    total = 0
+    idx = 1
+    for start in range(0, len(text), max_chars):
+        chunk = text[start:start + max_chars]
+        part_name = f"{base}_part{idx}.txt"
+        part_path = output_dir / part_name
+        full_text = header + chunk
+        part_path.write_text(full_text, encoding="utf-8")
+        parts.append(
+            ConvertedDocument(
+                source_path=str(source.resolve()),
+                target_path=str(part_path.resolve()),
+                title=f"{source.name} (part {idx})",
+                char_count=len(chunk),
+                format=fmt or source.suffix.lstrip(".") or "txt",
+                metadata={"size_bytes": source.stat().st_size, "part": idx},
+            )
+        )
+        total += len(chunk)
+        idx += 1
+
+    logger.warning(
+        "converter: split %s into %d parts (max_chars=%d) — total chars=%d",
+        source.name, len(parts), max_chars, total,
     )
+    return parts
